@@ -10,6 +10,9 @@ import (
 // configureSQLite sets high-performance pragmas for SQLite.
 // Must be called right after opening the DB.
 func configureSQLite(db *gorm.DB) error {
+	if db.Dialector.Name() != "sqlite" {
+		return nil
+	}
 	pragmas := []string{
 		"PRAGMA journal_mode = WAL",    // write-ahead logging
 		"PRAGMA synchronous = NORMAL",  // balance speed/safety

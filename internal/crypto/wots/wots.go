@@ -1,5 +1,8 @@
-// Package wots implements Winternitz One-Time Signature (WOTS+)
-// Quantum-resistant hash-based signature. Only uses SHA-256.
+// Package wots contains an experimental WOTS-like hash-chain primitive.
+// It is NOT a verified RFC 8391 WOTS+/XMSS implementation and MUST NOT be
+// used for production or described as providing certified post-quantum security.
+// No XMSS tree, authentication path, persistent one-time index, or rollback
+// protection is implemented in this package.
 package wots
 
 import (
@@ -9,11 +12,11 @@ import (
 )
 
 const (
-	W           = 16                  // Winternitz parameter
-	KeySize     = 32                  // element size in bytes
-	Len1        = 64                  // message digits (256 bits / 4)
-	Len2        = 3                   // checksum digits
-	ChainCount  = Len1 + Len2         // 67
+	W           = 16                   // Winternitz parameter
+	KeySize     = 32                   // element size in bytes
+	Len1        = 64                   // message digits (256 bits / 4)
+	Len2        = 3                    // checksum digits
+	ChainCount  = Len1 + Len2          // 67
 	PrivKeySize = ChainCount * KeySize // 2144 bytes
 	PubKeySize  = ChainCount * KeySize // 2144 bytes
 	SigSize     = ChainCount * KeySize // 2144 bytes
@@ -56,7 +59,8 @@ func checksumDigits(digits []byte) []byte {
 	}
 }
 
-// GenerateKeyPair derives a deterministic key pair from a 32-byte seed.
+// GenerateKeyPair derives an experimental deterministic key pair. Test/demo only;
+// never reuse this key for multiple messages or use it in production.
 func GenerateKeyPair(seed []byte) (privKey, pubKey []byte, err error) {
 	if len(seed) < 32 {
 		return nil, nil, errors.New("wots: seed must be at least 32 bytes")

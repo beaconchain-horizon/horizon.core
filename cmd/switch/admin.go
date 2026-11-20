@@ -1,11 +1,9 @@
 package main
 
 import (
-	"crypto/sha256"
-	"horizon-core/internal/crypto/wots"
-	"fmt"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -224,13 +222,13 @@ func adminAuditHandler(c *gin.Context) {
 
 func adminIssueLicenseHandler(c *gin.Context) {
 	var req struct {
-		LicenseID  string `json:"license_id" binding:"required"`
-		UserID     string `json:"user_id" binding:"required"`
-		ProductID  string `json:"product_id"`
-		Volume     int    `json:"volume"`
-		Duration   int    `json:"duration"`
+		LicenseID   string `json:"license_id" binding:"required"`
+		UserID      string `json:"user_id" binding:"required"`
+		ProductID   string `json:"product_id"`
+		Volume      int    `json:"volume"`
+		Duration    int    `json:"duration"`
 		LicenseType string `json:"license_type"`
-		MerkleRoot string `json:"merkle_root"`
+		MerkleRoot  string `json:"merkle_root"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -254,16 +252,16 @@ func adminIssueLicenseHandler(c *gin.Context) {
 
 	now := time.Now().Unix()
 	lic := &License{
-		LicenseID:  req.LicenseID,
-		UserID:     req.UserID,
-		ProductID:  req.ProductID,
-		Volume:     req.Volume,
-		Duration:   req.Duration,
-		MerkleRoot: req.MerkleRoot,
-		IssuedAt:   now,
-		ExpiresAt:  now + int64(req.Duration*86400),
-		Status:     "active",
-			LicenseType: req.LicenseType,
+		LicenseID:   req.LicenseID,
+		UserID:      req.UserID,
+		ProductID:   req.ProductID,
+		Volume:      req.Volume,
+		Duration:    req.Duration,
+		MerkleRoot:  req.MerkleRoot,
+		IssuedAt:    now,
+		ExpiresAt:   now + int64(req.Duration*86400),
+		Status:      "active",
+		LicenseType: req.LicenseType,
 	}
 
 	if lic.MerkleRoot == "" {
@@ -278,19 +276,11 @@ func adminIssueLicenseHandler(c *gin.Context) {
 	}
 	lic.Signature = sig
 
-		// ── [PQC LAYER] WOTS+ ──
-		pqcSeed := []byte("horizon-pqc-fallback-seed-2026-11-13-authority")
-		if usbSeed, err := os.ReadFile("D:/pqkey.txt"); err == nil && len(usbSeed) > 0 {
-			pqcSeed = usbSeed
-		}
-		wotsPriv, wotsPub, _ := wots.GenerateKeyPair(pqcSeed)
-		canonicalMsg := licenseCanonicalMessage(lic)
-			licHash := sha256.Sum256([]byte(canonicalMsg))
-		if wotsSig, err := wots.Sign(wotsPriv, licHash[:]); err == nil {
-			lic.WOTSSignature = hex.EncodeToString(wotsSig)
-			lic.WOTSPubKey = hex.EncodeToString(wotsPub)
-		}
-
+	// PQ signature issuance is deliberately disabled in production.
+	// The bundled WOTS code is experimental, is not a verified RFC 8391 XMSS implementation,
+	// and has no persistent one-time index or rollback protection. Keep the ECDSA signature above.
+	lic.WOTSSignature = ""
+	lic.WOTSPubKey = ""
 
 	if err := db.Create(lic).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed: " + err.Error()})
@@ -321,7 +311,7 @@ func adminIssueLicenseHandler(c *gin.Context) {
 		log.Printf("⛓  license %s queued as tx (awaiting 8-node consensus)", lic.LicenseID)
 	}
 
-		addAudit("issue_license", lic.LicenseID, "for user "+lic.UserID, c.ClientIP())
+	addAudit("issue_license", lic.LicenseID, "for user "+lic.UserID, c.ClientIP())
 
 	// refresh license state in memory (so isLicenseValid becomes true)
 	checkLicenseNow()

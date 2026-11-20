@@ -1,0 +1,31 @@
+{
+  "document_type": "Horizon Core v1.4 signature policy",
+  "protocol_version": "1.4",
+  "activation_state": "DESIGN_ONLY_NOT_ACTIVE",
+  "historical_blocks": {
+    "algorithm": "ECDSA-secp256k1",
+    "verification": "preserve_existing_signature_encoding_and_keys",
+    "rewrite_or_resign": false
+  },
+  "future_block_extension": {
+    "mode": "HYBRID_DUAL_SIGNATURE_PROPOSED",
+    "legacy_signature": "ECDSA-secp256k1",
+    "post_quantum_signature": "XMSS-RFC8391_WITH_WOTS_PLUS_ONE_TIME_SIGNATURES",
+    "xmss_parameter_set": "NOT_SELECTED_PENDING_SECURITY_AND_PERFORMANCE_REVIEW",
+    "require_both_signatures": false,
+    "activation_height": null,
+    "authority_transition": "REQUIRES_EXPLICIT_CHECKPOINT_SIGNED_BY_CURRENT_AUTHORITY"
+  },
+  "wots_plus": {
+    "status": "NOT_ACTIVE",
+    "role": "ONE_TIME_SIGNATURE_PRIMITIVE_ONLY",
+    "allowed_profile": "XMSS_OR_XMSS_MT_WITH_RFC8391_STATE_AND_AUTHENTICATION_PATH",
+    "key_reuse": "FORBIDDEN",
+    "persistent_index_and_rollback_protection": "REQUIRED_BEFORE_ANY_ACTIVATION"
+  },
+  "network_separation": {
+    "secondary_network": "SEPARATE_ARCHIVE_ONLY_UNTIL_CHAIN_ID_GENESIS_AND_SIGNATURE_PROFILE_ARE_PROVEN",
+    "cross_network_merge": false,
+    "cross_network_transaction_replay": false
+  }
+}

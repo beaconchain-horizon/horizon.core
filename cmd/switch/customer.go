@@ -90,6 +90,11 @@ func initCustomers() {
 		return
 	}
 
+	if !runtimeWritesAllowed.Load() {
+		log.Printf("[RECOVERY] customer seed disabled by recovery write gate")
+		return
+	}
+
 	path := os.Getenv("CUSTOMERS_CONFIG")
 	if path == "" {
 		path = "./config/customers.json"

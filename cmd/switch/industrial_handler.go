@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"time"
 
@@ -10,17 +11,13 @@ import (
 )
 
 func registerIndustrialRoutes(api *gin.RouterGroup) {
-	_ = db.AutoMigrate(
-		&industrial.Site{},
-		&industrial.Sensor{},
-		&industrial.Reading{},
-		&industrial.Alert{},
-		&industrial.TamperEvent{},
-		&industrial.ControlCommand{},
-		&industrial.SensorState{},
-	)
-
 	ind := api.Group("/industrial")
+	if err := requireExistingSwitchTables(db, &industrial.Site{}, &industrial.Sensor{}, &industrial.Reading{}, &industrial.Alert{}, &industrial.TamperEvent{}, &industrial.ControlCommand{}, &industrial.SensorState{}); err != nil {
+		log.Printf("[INDUSTRIAL] routes disabled; schema preflight failed: %v", err)
+		ind.Use(func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "industrial service unavailable: required schema is incomplete"})
+		})
+	}
 	ind.GET("/sites", listIndustrialSites)
 	ind.POST("/sites", createIndustrialSite)
 	ind.GET("/sensors", listIndustrialSensors)
@@ -201,7 +198,9 @@ func listIndustrialAlerts(c *gin.Context) {
 }
 
 func ackIndustrialAlert(c *gin.Context) {
-	var req struct{ ID uint `json:"id"` }
+	var req struct {
+		ID uint `json:"id"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

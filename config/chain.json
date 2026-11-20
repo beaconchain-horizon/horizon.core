@@ -1,0 +1,8 @@
+{
+  "chain_id": "horizon-core-v1.4",
+  "network_name": "Horizon Core v1.4",
+  "version": "1.4",
+  "genesis_hash": "8c0763dd5b1345cba0782f03163e8a69de49bede54c91bb878126742c7990603",
+  "genesis_timestamp_utc": "2026-10-31T18:43:01.8552524Z",
+  "description": "Locked primary Horizon Core v1.4 protocol identity. Historical ledger bytes and signatures are immutable."
+}

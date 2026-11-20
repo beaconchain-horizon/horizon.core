@@ -1,8 +1,6 @@
 package chain
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -10,60 +8,38 @@ import (
 	"gorm.io/gorm"
 )
 
-// GenesisChainID is the identifier for this chain instance.
-// In production it should be unique per deployment.
+// GenesisChainID is the immutable identifier for this protocol chain.
 const GenesisChainID = "horizon-core-v1.4"
 
-// EnsureGenesis creates the genesis block if it does not exist.
-// Returns the genesis block.
-func EnsureGenesis(db *gorm.DB, authorityPubKeyHex string) (*Block, error) {
+const (
+	lockedV14GenesisHash        = "8c0763dd5b1345cba0782f03163e8a69de49bede54c91bb878126742c7990603"
+	lockedV14GenesisUnixSeconds = int64(1793472181)
+	lockedV14ZeroHash           = "0000000000000000000000000000000000000000000000000000000000000000"
+)
+
+// EnsureGenesis only loads an existing, exactly matching locked v1.4 Genesis.
+// It never creates or rewrites Genesis at runtime.
+func EnsureGenesis(db *gorm.DB, _ string) (*Block, error) {
+	if db == nil {
+		return nil, fmt.Errorf("Genesis verification: nil database")
+	}
 	var existing Block
 	err := db.Where("number = ?", 0).First(&existing).Error
-	if err == nil {
-		return &existing, nil
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("locked v1.4 Genesis is absent; dynamic Genesis creation is disabled")
+		}
+		return nil, fmt.Errorf("Genesis lookup: %w", err)
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, fmt.Errorf("genesis lookup: %w", err)
+	if existing.Number != 0 ||
+		existing.PreviousHash != lockedV14ZeroHash ||
+		existing.MerkleRoot != lockedV14GenesisHash ||
+		existing.BlockHash != lockedV14GenesisHash ||
+		existing.TxCount != 0 ||
+		!existing.Timestamp.Equal(time.Unix(lockedV14GenesisUnixSeconds, 855252400).UTC()) {
+		return nil, fmt.Errorf("stored Genesis does not match the locked v1.4 header")
 	}
-
-	ts := time.Now().UTC()
-
-	// Genesis merkle root = hash of chain_id + pubkey + timestamp.
-	h := sha256.New()
-	h.Write([]byte(GenesisChainID))
-	h.Write([]byte("|"))
-	h.Write([]byte(authorityPubKeyHex))
-	h.Write([]byte("|"))
-	h.Write([]byte(ts.Format(time.RFC3339)))
-	root := hex.EncodeToString(h.Sum(nil))
-
-	block := Block{
-		Number:       0,
-		PreviousHash: "0000000000000000000000000000000000000000000000000000000000000000",
-		MerkleRoot:   root,
-		MerkleType:   "genesis",
-		Timestamp:    ts,
-		TxCount:      0,
-		BlockHash:    root, // block 0 hash = its merkle root
-		CreatedAt:    ts,
-	}
-
-	if err := db.Create(&block).Error; err != nil {
-		return nil, fmt.Errorf("create genesis block: %w", err)
-	}
-
-	gen := Genesis{
-		ID:              1,
-		ChainID:         GenesisChainID,
-		AuthorityPubKey: authorityPubKeyHex,
-		Timestamp:       ts,
-	}
-	_ = db.Where("id = ?", 1).Delete(&Genesis{}).Error
-	if err := db.Create(&gen).Error; err != nil {
-		return nil, fmt.Errorf("create genesis record: %w", err)
-	}
-
-	return &block, nil
+	return &existing, nil
 }
 
 // LatestBlock returns the highest-numbered block.

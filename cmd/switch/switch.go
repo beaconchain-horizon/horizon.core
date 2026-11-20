@@ -216,28 +216,23 @@ func simpleMerkleRoot(txIDs []string, algo string) string {
 // ============================================================
 
 func getLastBlock() (*Block, error) {
+
 	var b Block
 	err := db.Order("block_num desc").First(&b).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			genesis := &Block{
-				BlockNum:   0,
-				Timestamp:  time.Now().Unix(),
-				PrevHash:   "genesis",
-				Hash:       hashData([]byte("genesis-block")),
-				MerkleRoot: hashData([]byte("genesis")),
-				MerkleAlgo: "v1",
-				TxCount:    0,
-			}
-			db.Create(genesis)
-			return genesis, nil
+			return nil, fmt.Errorf("main ledger has no Genesis; automatic Genesis creation is disabled: %w", err)
 		}
 		return nil, err
 	}
 	return &b, nil
+
 }
 
 func mineBlock() (*Block, error) {
+	if err := validateMainBlockChainForWrite(db); err != nil {
+		return nil, err
+	}
 	last, err := getLastBlock()
 	if err != nil {
 		return nil, err
@@ -362,7 +357,7 @@ func unlockKeyHandler(c *gin.Context) {
 	checkLicenseNow()
 
 	c.JSON(http.StatusOK, gin.H{
-		"status": "unlocked",
+		"status":      "unlocked",
 		"public_addr": pubAddr,
 	})
 }
@@ -403,7 +398,7 @@ func createTxHandler(c *gin.Context) {
 		c.JSON(http.StatusPaymentRequired, resp)
 		return
 	}
-	
+
 	// ═══ Fail-Closed License Validation ═══
 	licID := c.GetHeader("X-License-ID")
 	if licID == "" {
@@ -577,17 +572,24 @@ func listTxHandler(c *gin.Context) {
 // ============ BLOCKS ============
 
 func mineBlockHandler(c *gin.Context) {
+	if err := validateMainBlockChainForWrite(db); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "block production paused by canonical v1.4 safety gate", "reason": err.Error()})
+		return
+	}
 	var txs []Transaction
 	if err := db.Where("synced = ?", false).Limit(5000).Find(&txs).Error; err != nil {
-		c.JSON(500, gin.H{"error": "db error fetching txs"}); return
+		c.JSON(500, gin.H{"error": "db error fetching txs"})
+		return
 	}
 	if len(txs) == 0 {
-		c.JSON(400, gin.H{"error": "no pending transactions"}); return
+		c.JSON(400, gin.H{"error": "no pending transactions"})
+		return
 	}
 
 	var licenses []License
 	if err := db.Where("status = ?", "active").Find(&licenses).Error; err != nil {
-		c.JSON(500, gin.H{"error": "db error fetching licenses"}); return
+		c.JSON(500, gin.H{"error": "db error fetching licenses"})
+		return
 	}
 
 	var consTxs []ConsensusTx
@@ -595,9 +597,14 @@ func mineBlockHandler(c *gin.Context) {
 		licID := t.LicenseID
 		if licID == "" {
 			for _, l := range licenses {
-				if l.UserID == t.From { licID = l.LicenseID; break }
+				if l.UserID == t.From {
+					licID = l.LicenseID
+					break
+				}
 			}
-			if licID == "" && len(licenses) > 0 { licID = licenses[0].LicenseID }
+			if licID == "" && len(licenses) > 0 {
+				licID = licenses[0].LicenseID
+			}
 		}
 		consTxs = append(consTxs, ConsensusTx{From: t.From, To: t.To, Amount: t.Amount, LicenseID: licID, Type: t.Type, Payload: t.Payload})
 	}
@@ -611,44 +618,58 @@ func mineBlockHandler(c *gin.Context) {
 	db.Order("block_num desc").First(&lastBlock)
 	prevHash := "genesis"
 	blockNum := 0
-	if lastBlock.BlockNum >= 0 { prevHash = lastBlock.Hash; blockNum = lastBlock.BlockNum + 1 }
+	if lastBlock.BlockNum >= 0 {
+		prevHash = lastBlock.Hash
+		blockNum = lastBlock.BlockNum + 1
+	}
 
 	ts := time.Now().Unix()
-	
+
 	leaves := make([][]byte, len(consTxs))
 	for i, tx := range consTxs {
 		b, _ := json.Marshal(tx)
 		h := sha256.Sum256(b)
 		leaves[i] = h[:]
 	}
-	
+
 	merkleRoot := ""
 	if len(leaves) > 0 {
 		level := make([][]byte, len(leaves))
-		for i, l := range leaves { level[i] = l }
+		for i, l := range leaves {
+			level[i] = l
+		}
 		for len(level) > 1 {
 			next := make([][]byte, 0, (len(level)+1)/2)
 			for i := 0; i < len(level); i += 2 {
-				a := level[i]; b := a
-				if i+1 < len(level) { b = level[i+1] }
-				h := sha256.New(); h.Write(a); h.Write(b)
+				a := level[i]
+				b := a
+				if i+1 < len(level) {
+					b = level[i+1]
+				}
+				h := sha256.New()
+				h.Write(a)
+				h.Write(b)
 				next = append(next, h.Sum(nil))
 			}
 			level = next
 		}
 		merkleRoot = hex.EncodeToString(level[0])
-	} else { merkleRoot = strings.Repeat("0", 64) }
-	
+	} else {
+		merkleRoot = strings.Repeat("0", 64)
+	}
+
 	h := sha256.New()
-	h.Write([]byte(prevHash)); h.Write([]byte(merkleRoot))
-	h.Write([]byte(fmt.Sprintf("%d", ts))); h.Write([]byte(fmt.Sprintf("%d", len(consTxs))))
+	h.Write([]byte(prevHash))
+	h.Write([]byte(merkleRoot))
+	h.Write([]byte(fmt.Sprintf("%d", ts)))
+	h.Write([]byte(fmt.Sprintf("%d", len(consTxs))))
 	blockHash := hex.EncodeToString(h.Sum(nil))
 
 	var sigHex, signerAddr string
 	stateMutex.RLock()
 	key := unlockedKey
 	stateMutex.RUnlock()
-	
+
 	if key != nil {
 		hashB, _ := hex.DecodeString(blockHash)
 		sig, err := crypto.SignHashRS(key, hashB)
@@ -656,28 +677,35 @@ func mineBlockHandler(c *gin.Context) {
 			sigHex = hex.EncodeToString(sig)
 			signerAddr = "0x" + hex.EncodeToString(key.PublicKey.X.Bytes())
 		}
-	} else { c.JSON(400, gin.H{"error": "key not unlocked"}); return }
+	} else {
+		c.JSON(400, gin.H{"error": "key not unlocked"})
+		return
+	}
 
 	blockLicID := fmt.Sprintf("BLOCK-LIC-%d-%d", blockNum, ts)
 	payload := ConsensusPayload{
 		BlockLicenseID: blockLicID,
-		BlockNumber: uint64(blockNum), BlockHash: blockHash, PrevHash: prevHash,
+		BlockNumber:    uint64(blockNum), BlockHash: blockHash, PrevHash: prevHash,
 		MerkleRoot: merkleRoot, MerkleType: "binary", Timestamp: ts, TxCount: len(consTxs),
 		Signature: sigHex, SignerAddr: signerAddr, Licenses: consLicenses, Txs: consTxs,
 	}
 
 	accepted, votes, err := RequestConsensus(payload)
 	if err != nil || !accepted {
-		c.JSON(402, gin.H{"error": "consensus rejected", "votes": votes, "reason": fmt.Sprintf("%v", err)}); return
+		c.JSON(402, gin.H{"error": "consensus rejected", "votes": votes, "reason": fmt.Sprintf("%v", err)})
+		return
 	}
 
 	newBlock := Block{
 		BlockLicenseID: blockLicID,
-		BlockNum: blockNum, Timestamp: ts, PrevHash: prevHash, Hash: blockHash,
+		BlockNum:       blockNum, Timestamp: ts, PrevHash: prevHash, Hash: blockHash,
 		MerkleRoot: merkleRoot, MerkleAlgo: "v1", TxCount: len(txs),
 		CreatedAt: time.Now(), Signature: sigHex, SignerAddr: signerAddr,
 	}
-	if err := db.Create(&newBlock).Error; err != nil { c.JSON(500, gin.H{"error": "failed to save block"}); return }
+	if err := db.Create(&newBlock).Error; err != nil {
+		c.JSON(500, gin.H{"error": "failed to save block"})
+		return
+	}
 
 	for _, t := range txs {
 		db.Model(&t).Updates(map[string]interface{}{"synced": true, "block_index": blockNum})
@@ -721,19 +749,33 @@ func saveLicenseHandler(c *gin.Context) {
 
 	var sd map[string]interface{}
 	json.Unmarshal([]byte(req.SignedData), &sd)
-	
+
 	var issuedAt, expiresAt int64
 	var duration int
 	var merkleRoot, hardwareID string
-	
-	if val, ok := sd["issued_at"].(float64); ok { issuedAt = int64(val) }
-	if val, ok := sd["expires_at"].(float64); ok { expiresAt = int64(val) }
-	if val, ok := sd["duration"].(float64); ok { duration = int(val) }
-	if val, ok := sd["merkle_root"].(string); ok { merkleRoot = val }
-	if val, ok := sd["hardware_id"].(string); ok { hardwareID = val }
-	
-	if merkleRoot == "" { merkleRoot = req.MerkleRoot }
-	if hardwareID == "" { hardwareID = req.HardwareID }
+
+	if val, ok := sd["issued_at"].(float64); ok {
+		issuedAt = int64(val)
+	}
+	if val, ok := sd["expires_at"].(float64); ok {
+		expiresAt = int64(val)
+	}
+	if val, ok := sd["duration"].(float64); ok {
+		duration = int(val)
+	}
+	if val, ok := sd["merkle_root"].(string); ok {
+		merkleRoot = val
+	}
+	if val, ok := sd["hardware_id"].(string); ok {
+		hardwareID = val
+	}
+
+	if merkleRoot == "" {
+		merkleRoot = req.MerkleRoot
+	}
+	if hardwareID == "" {
+		hardwareID = req.HardwareID
+	}
 
 	lic := &License{
 		LicenseID:  req.LicenseID,
@@ -877,7 +919,9 @@ func createCeremonyAttestation(ceremonyType, operatorID string) {
 	key := unlockedKey
 	stateMutex.RUnlock()
 
-	if key == nil { return }
+	if key == nil {
+		return
+	}
 
 	pubKeyX := key.PublicKey.X.Bytes()
 	pubKeyY := key.PublicKey.Y.Bytes()
@@ -898,7 +942,7 @@ func createCeremonyAttestation(ceremonyType, operatorID string) {
 
 	attBytes, _ := json.Marshal(att)
 	attHash := sha256.Sum256(attBytes)
-	
+
 	sig, err := crypto.SignHashRS(key, attHash[:])
 	if err == nil {
 		att.Signature = hex.EncodeToString(sig)
@@ -917,7 +961,7 @@ func createCeremonyAttestation(ceremonyType, operatorID string) {
 		Timestamp:  att.Timestamp,
 		BlockIndex: -1,
 	}
-	
+
 	queueTransaction(tx)
 	log.Printf("✓ Ceremony Attestation queued: %s by %s", att.CeremonyType, operatorID)
 }
@@ -948,13 +992,10 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to open database:", err)
 	}
-	if err := configureSQLite(db); err != nil {
-		log.Printf("configureSQLite failed: %v", err)
-	}
 
 	// Auto migrate
-	if err := db.AutoMigrate(&Block{}, &Transaction{}, &License{}, &KeyVault{}, &BankAccount{}, &Account{}, &Invoice{}, &Customer{}); err != nil {
-		log.Fatal("Migration failed:", err)
+	if err := ensureSwitchSchema(db, &Block{}, &Transaction{}, &License{}, &KeyVault{}, &BankAccount{}, &Account{}, &Invoice{}, &Customer{}); err != nil {
+		log.Fatal("Schema preflight failed:", err)
 	}
 	log.Println("SQLite database ready:", dbPath)
 
@@ -975,35 +1016,50 @@ func main() {
 	initAirGap()
 
 	// init license chain (blockchain registry)
-	if err := initLicenseChain(db); err != nil {
-		log.Printf("⚠️  license chain init: %v", err)
-	}
 	initChainConfig()
+	if err := configureRuntimeWriteReadiness(db); err != nil {
+		log.Printf("[RECOVERY] READ-ONLY MODE: %v", err)
+	}
 	initCustomers()
 
 	// init adaptive chain batcher (async batching)
-	InitBatcher(db, BatcherConfig{
-		MaxSize:       50000,
-		FlushInterval: 200 * time.Millisecond,
-	})
+	if runtimeWritesAllowed.Load() {
+		InitBatcher(db, BatcherConfig{
+			MaxSize:       50000,
+			FlushInterval: 200 * time.Millisecond,
+		})
+	} else {
+		log.Printf("[RECOVERY] batcher disabled: canonical chain validation has not passed")
+	}
 
 	// start industrial anchor worker
-	startIndustrialAnchorWorker()
+	if runtimeWritesAllowed.Load() {
+		startIndustrialAnchorWorker()
+	} else {
+		log.Printf("[RECOVERY] industrial anchor worker disabled")
+	}
 	initAuditMiddleware()
 	if err := loadLedgerFromDB(ledger); err != nil {
 		log.Printf("ledger load warning: %v", err)
 	}
 	initTxQueue()
 	ledgerStop = make(chan struct{})
-	startLedgerLoops(ledger, ledgerStop)
+	if runtimeWritesAllowed.Load() {
+		startLedgerLoops(ledger, ledgerStop)
+	} else {
+		log.Printf("[RECOVERY] ledger write loops disabled")
+	}
 	log.Println("Ledger initialized (in-memory + async persist)")
 
 	// Ensure genesis block exists
-	getLastBlock()
+	if _, err := getLastBlock(); err != nil {
+		log.Printf("[CHAIN] startup ledger preflight failed; no Genesis was created: %v", err)
+	}
 
 	// Init Gin
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
+	r.Use(recoveryWriteGateMiddleware())
 	r.Use(cors.New(cors.Config{
 		AllowOriginFunc: func(origin string) bool {
 			if origin == "" || origin == "null" {
@@ -1027,7 +1083,6 @@ func main() {
 	r.Use(RateLimitMiddleware(rl))
 	r.Use(SanitizeInputMiddleware())
 
-
 	// Routes
 	api := r.Group("/api/v1")
 	api.POST("/license/check", licenseCheckHandler)
@@ -1035,7 +1090,15 @@ func main() {
 		registerIndustrialRoutes(api)
 		registerTenantRoutes(api)
 
-		startIndustrialBackgroundJobs()
+		if runtimeWritesAllowed.Load() {
+
+			startIndustrialBackgroundJobs()
+
+		} else {
+
+			log.Printf("[RECOVERY] industrial background jobs disabled")
+
+		}
 		api.GET("/health", healthHandler)
 		api.GET("/chain/info", chainInfoHandler)
 		api.GET("/chain/stats", func(c *gin.Context) {

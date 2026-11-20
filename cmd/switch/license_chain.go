@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -80,11 +81,30 @@ func canonicalBlockMessage(blockNum int64, prevHash, merkleRoot string, ts int64
 }
 
 // ─── Migrate chain tables ───
+const licenseChainSchemaMigrationEnv = "HORIZON_ALLOW_LICENSE_CHAIN_SCHEMA_MIGRATION"
+const licenseChainGenesisBootstrapEnv = "HORIZON_ALLOW_LICENSE_CHAIN_GENESIS_BOOTSTRAP"
+
+func licenseChainSchemaMigrationAllowed() bool {
+	return os.Getenv(licenseChainSchemaMigrationEnv) == "true"
+}
+
+func licenseChainGenesisBootstrapAllowed() bool {
+
+	// Runtime Genesis bootstrap is permanently disabled. The legacy environment
+	// variable is intentionally ignored; only an offline, verified import may
+	// establish the locked v1.4 Genesis.
+	return false
+
+}
+
 func migrateChain(db *gorm.DB) error {
-	if err := db.AutoMigrate(&ChainBlock{}, &ChainTx{}); err != nil {
-		return err
+	if !licenseChainSchemaMigrationAllowed() {
+		if !db.Migrator().HasTable(&ChainBlock{}) || !db.Migrator().HasTable(&ChainTx{}) {
+			return fmt.Errorf("license-chain schema is incomplete; automatic migration is disabled; set %s=true only for an intentional migration", licenseChainSchemaMigrationEnv)
+		}
+		return nil
 	}
-	return nil
+	return db.AutoMigrate(&ChainBlock{}, &ChainTx{})
 }
 
 // ─── Compute tx hash ───
@@ -117,31 +137,9 @@ func computeBlockHash(blockNum int64, prevHash, merkleRoot string, ts int64) str
 // ═══════════════════════════════════════════════════════════════════
 
 func createGenesisBlock(db *gorm.DB, ownerKey *ecdsa.PrivateKey) (*ChainBlock, error) {
-	ts := time.Now().Unix()
-	prevHash := "0000000000000000000000000000000000000000000000000000000000000000"
-	merkle := ""
-	hash := computeBlockHash(0, prevHash, merkle, ts)
-	sig, err := signData(ownerKey, []byte(canonicalBlockMessage(0, prevHash, merkle, ts)))
-	if err != nil {
-		return nil, err
-	}
-	addr := publicAddressFromKey(ownerKey)
-	block := &ChainBlock{
-		BlockNum:   0,
-		PrevHash:   prevHash,
-		MerkleRoot: merkle,
-		TxCount:    0,
-		Timestamp:  ts,
-		Hash:       hash,
-		Signature:  sig,
-		SignerAddr: addr,
-	}
-	if err := db.Create(block).Error; err != nil {
-		return nil, err
-	}
 
-	log.Printf("⛓  Genesis block created (signer=%s)", addr[:10])
-	return block, nil
+	return nil, fmt.Errorf("runtime license-chain Genesis creation is permanently disabled; use a separately audited import of the locked v1.4 Genesis artifact")
+
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -150,6 +148,10 @@ func createGenesisBlock(db *gorm.DB, ownerKey *ecdsa.PrivateKey) (*ChainBlock, e
 
 func addChainBlock(db *gorm.DB, ownerKey *ecdsa.PrivateKey, txs []ChainTx) (*ChainBlock, error) {
 	chainMutex.Lock()
+	if err := validateLicenseChainForWrite(db); err != nil {
+		chainMutex.Unlock()
+		return nil, err
+	}
 	defer chainMutex.Unlock()
 
 	// get last block (cached)
@@ -359,36 +361,37 @@ func int64Val(m map[string]interface{}, k string) int64 {
 // ═══════════════════════════════════════════════════════════════════
 
 func initLicenseChain(db *gorm.DB) error {
+
 	if err := migrateChain(db); err != nil {
 		return err
 	}
 	var count int64
-	db.Model(&ChainBlock{}).Count(&count)
+	if err := db.Model(&ChainBlock{}).Count(&count).Error; err != nil {
+		return fmt.Errorf("license-chain startup count: %w", err)
+	}
 	if count == 0 {
-		// create genesis from currently unlocked key (or skip if locked)
-		stateMutex.RLock()
-		k := unlockedKey
-		stateMutex.RUnlock()
-		if k == nil {
-			log.Println("⛓  chain: no unlocked key, genesis deferred until unlock")
-			return nil
-		}
-		_, err := createGenesisBlock(db, k)
-		return err
+		return fmt.Errorf("license chain is empty; dynamic Genesis creation is disabled")
 	}
 	chainLoaded = true
 	return nil
+
 }
 
 // EnsureGenesis — called from key unlock
 func ensureChainGenesis(db *gorm.DB, ownerKey *ecdsa.PrivateKey) error {
+
+	if db == nil {
+		return fmt.Errorf("license-chain Genesis check: nil database")
+	}
 	var count int64
-	db.Model(&ChainBlock{}).Count(&count)
+	if err := db.Model(&ChainBlock{}).Count(&count).Error; err != nil {
+		return fmt.Errorf("license-chain Genesis check: %w", err)
+	}
 	if count == 0 {
-		_, gerr := createGenesisBlock(db, ownerKey)
-		return gerr
+		return fmt.Errorf("license chain is empty; dynamic Genesis creation is disabled")
 	}
 	return nil
+
 }
 
 // ─── helper: random hex string ───

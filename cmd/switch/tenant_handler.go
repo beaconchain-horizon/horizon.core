@@ -28,6 +28,7 @@ func registerTenantRoutes(api *gin.RouterGroup) {
 	// اطمینان از ساخت جداول tenant و heartbeat
 	if err := tenant.Init(db); err != nil {
 		log.Printf("⚠️  tenant.Init failed: %v", err)
+		return
 	}
 
 	t := api.Group("/tenant")

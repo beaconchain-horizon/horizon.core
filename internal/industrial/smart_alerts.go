@@ -87,8 +87,21 @@ func StartHeartbeatMonitor(db *gorm.DB, interval time.Duration) {
 	log.Printf("[INDUSTRIAL] heartbeat monitor started (silent-after=%s)", heartbeatSilent)
 }
 
+func backgroundJobsSchemaReady(db *gorm.DB) bool {
+	if db == nil {
+		return false
+	}
+	return db.Migrator().HasTable(&Sensor{}) &&
+		db.Migrator().HasTable(&Reading{}) &&
+		db.Migrator().HasTable(&Alert{}) &&
+		db.Migrator().HasTable(&SensorState{})
+}
+
 func StartBackgroundJobs(db *gorm.DB) {
-	db.AutoMigrate(&SensorState{})
+	if !backgroundJobsSchemaReady(db) {
+		log.Printf("[INDUSTRIAL] background jobs disabled: required schema is incomplete")
+		return
+	}
 	StartHeartbeatMonitor(db, 1*time.Minute)
 	if url := os.Getenv("SYNC_TARGET_URL"); url != "" {
 		StartSyncWorker(db, url, os.Getenv("SYNC_API_KEY"), 30*time.Second)

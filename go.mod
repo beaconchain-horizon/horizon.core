@@ -7,6 +7,7 @@ require (
 	github.com/gin-contrib/cors v1.5.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/glebarez/sqlite v1.11.0
+	github.com/lib/pq v1.12.3
 	golang.org/x/crypto v0.43.0
 	golang.org/x/net v0.46.0
 	gorm.io/driver/postgres v1.5.11

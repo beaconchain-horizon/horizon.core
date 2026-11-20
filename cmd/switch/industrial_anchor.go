@@ -31,6 +31,10 @@ var (
 )
 
 func startIndustrialAnchorWorker() {
+	if err := requireExistingSwitchTables(db, &AnchorState{}, &industrial.Reading{}); err != nil {
+		log.Printf("[INDUSTRIAL] anchor worker disabled; schema preflight failed: %v", err)
+		return
+	}
 	anchorMutex.Lock()
 	if anchorStarted {
 		anchorMutex.Unlock()
@@ -38,11 +42,6 @@ func startIndustrialAnchorWorker() {
 	}
 	anchorStarted = true
 	anchorMutex.Unlock()
-
-	if err := db.AutoMigrate(&AnchorState{}); err != nil {
-		log.Printf("⚠️  anchor: migrate failed: %v", err)
-		return
-	}
 
 	go func() {
 		ticker := time.NewTicker(AnchorInterval)

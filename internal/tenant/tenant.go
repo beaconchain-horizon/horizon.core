@@ -3,6 +3,8 @@ package tenant
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -27,7 +29,20 @@ type Tenant struct {
 
 // AutoMigrate
 func Init(db *gorm.DB) error {
-	return db.AutoMigrate(&Tenant{}, &Heartbeat{})
+	if db == nil {
+		return fmt.Errorf("tenant schema preflight: nil database")
+	}
+	missing := make([]string, 0, 2)
+	if !db.Migrator().HasTable(&Tenant{}) {
+		missing = append(missing, "tenants")
+	}
+	if !db.Migrator().HasTable(&Heartbeat{}) {
+		missing = append(missing, "heartbeats")
+	}
+	if len(missing) != 0 {
+		return fmt.Errorf("tenant schema incomplete; automatic migration is disabled; missing tables: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // GenerateToken توکن امن برای agent
