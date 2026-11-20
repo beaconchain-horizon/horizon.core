@@ -26,6 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/netutil"
 	"gorm.io/gorm"
+	"horizon-core/internal/authority"
 	"horizon-core/internal/crypto"
 )
 
@@ -178,7 +179,7 @@ func publicAddressFromKey(priv *ecdsa.PrivateKey) string {
 func signData(priv *ecdsa.PrivateKey, data []byte) (string, error) {
 	hash := sha256.Sum256(data)
 
-	sig, err := crypto.SignHashRS(priv, hash[:])
+	sig, err := authority.SignECDSAHash(priv, hash[:])
 	if err != nil {
 		return "", err
 	}
@@ -672,7 +673,7 @@ func mineBlockHandler(c *gin.Context) {
 
 	if key != nil {
 		hashB, _ := hex.DecodeString(blockHash)
-		sig, err := crypto.SignHashRS(key, hashB)
+		sig, err := authority.SignECDSAHash(key, hashB)
 		if err == nil {
 			sigHex = hex.EncodeToString(sig)
 			signerAddr = "0x" + hex.EncodeToString(key.PublicKey.X.Bytes())
@@ -943,7 +944,7 @@ func createCeremonyAttestation(ceremonyType, operatorID string) {
 	attBytes, _ := json.Marshal(att)
 	attHash := sha256.Sum256(attBytes)
 
-	sig, err := crypto.SignHashRS(key, attHash[:])
+	sig, err := authority.SignECDSAHash(key, attHash[:])
 	if err == nil {
 		att.Signature = hex.EncodeToString(sig)
 		lastCeremonyHash = hex.EncodeToString(attHash[:])
