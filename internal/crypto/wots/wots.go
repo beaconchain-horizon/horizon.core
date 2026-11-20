@@ -1,8 +1,14 @@
-// Package wots contains an experimental WOTS-like hash-chain primitive.
-// It is NOT a verified RFC 8391 WOTS+/XMSS implementation and MUST NOT be
-// used for production or described as providing certified post-quantum security.
-// No XMSS tree, authentication path, persistent one-time index, or rollback
-// protection is implemented in this package.
+// Package wots is a legacy, experimental hash-chain verifier.
+//
+// This package is NOT an RFC 8391 WOTS+ implementation and is NOT XMSS.
+// It has no stateful one-time-key allocation, Merkle tree, authentication
+// paths, or rollback protection. Verification is retained only for reading
+// historical data produced by this legacy format. New key generation and
+// signing are disabled.
+//
+// Deprecated: use a separately reviewed, stateful signature construction for
+// any future post-quantum signing. Do not describe this package as WOTS+ or
+// as providing production or certified post-quantum security.
 package wots
 
 import (
@@ -12,20 +18,57 @@ import (
 )
 
 const (
-	W           = 16                   // Winternitz parameter
-	KeySize     = 32                   // element size in bytes
-	Len1        = 64                   // message digits (256 bits / 4)
-	Len2        = 3                    // checksum digits
-	ChainCount  = Len1 + Len2          // 67
-	PrivKeySize = ChainCount * KeySize // 2144 bytes
-	PubKeySize  = ChainCount * KeySize // 2144 bytes
-	SigSize     = ChainCount * KeySize // 2144 bytes
+	W           = 16
+	KeySize     = 32
+	Len1        = 64
+	Len2        = 3
+	ChainCount  = Len1 + Len2
+	PrivKeySize = ChainCount * KeySize
+	PubKeySize  = ChainCount * KeySize
+	SigSize     = ChainCount * KeySize
 )
 
 var (
-	ErrInvalidKeySize = errors.New("wots: invalid key size")
-	ErrInvalidMsgSize = errors.New("wots: message hash must be 32 bytes")
+	ErrInvalidKeySize  = errors.New("wots: invalid key size")
+	ErrInvalidMsgSize  = errors.New("wots: message hash must be 32 bytes")
+	ErrSigningDisabled = errors.New("wots: legacy signing and key generation are disabled; verification only")
 )
+
+// GenerateKeyPair is retained for source compatibility, but no longer
+// generates keys. The legacy construction is not safe for production use.
+//
+// Deprecated: always returns ErrSigningDisabled.
+func GenerateKeyPair(seed []byte) (privKey, pubKey []byte, err error) {
+	return nil, nil, ErrSigningDisabled
+}
+
+// Sign is retained for source compatibility, but cannot create new
+// signatures with the legacy construction.
+//
+// Deprecated: always returns ErrSigningDisabled.
+func Sign(privKey, msgHash []byte) ([]byte, error) {
+	return nil, ErrSigningDisabled
+}
+
+// Verify checks a signature in the historical experimental hash-chain
+// format. It does not verify RFC 8391 WOTS+, XMSS, or an Authority identity.
+// Keep this read-only path only where legacy data must remain inspectable.
+func Verify(pubKey, msgHash, sig []byte) bool {
+	if len(pubKey) != PubKeySize || len(sig) != SigSize || len(msgHash) != 32 {
+		return false
+	}
+	digits := messageToDigits(msgHash)
+	allDigits := append(digits, checksumDigits(digits)...)
+	for i, d := range allDigits {
+		elem := sig[i*KeySize : (i+1)*KeySize]
+		computed := chain(elem, W-1-int(d))
+		expected := pubKey[i*KeySize : (i+1)*KeySize]
+		if !bytes.Equal(computed, expected) {
+			return false
+		}
+	}
+	return true
+}
 
 func chain(x []byte, steps int) []byte {
 	h := make([]byte, 32)
@@ -51,65 +94,10 @@ func checksumDigits(digits []byte) []byte {
 	for _, d := range digits {
 		csum += uint32(W - 1 - int(d))
 	}
-	csum <<= 4 // 12-bit alignment
+	csum <<= 4
 	return []byte{
 		byte((csum >> 8) & 0x0F),
 		byte((csum >> 4) & 0x0F),
 		byte(csum & 0x0F),
 	}
-}
-
-// GenerateKeyPair derives an experimental deterministic key pair. Test/demo only;
-// never reuse this key for multiple messages or use it in production.
-func GenerateKeyPair(seed []byte) (privKey, pubKey []byte, err error) {
-	if len(seed) < 32 {
-		return nil, nil, errors.New("wots: seed must be at least 32 bytes")
-	}
-	privKey = make([]byte, PrivKeySize)
-	for i := 0; i < ChainCount; i++ {
-		sum := sha256.Sum256(append(seed, byte(i)))
-		copy(privKey[i*KeySize:], sum[:])
-	}
-	pubKey = make([]byte, PubKeySize)
-	for i := 0; i < ChainCount; i++ {
-		elem := privKey[i*KeySize : (i+1)*KeySize]
-		copy(pubKey[i*KeySize:], chain(elem, W-1))
-	}
-	return privKey, pubKey, nil
-}
-
-// Sign produces a WOTS+ signature on a 32-byte message hash.
-func Sign(privKey, msgHash []byte) ([]byte, error) {
-	if len(privKey) != PrivKeySize {
-		return nil, ErrInvalidKeySize
-	}
-	if len(msgHash) != 32 {
-		return nil, ErrInvalidMsgSize
-	}
-	digits := messageToDigits(msgHash)
-	allDigits := append(digits, checksumDigits(digits)...)
-	sig := make([]byte, SigSize)
-	for i, d := range allDigits {
-		elem := privKey[i*KeySize : (i+1)*KeySize]
-		copy(sig[i*KeySize:], chain(elem, int(d)))
-	}
-	return sig, nil
-}
-
-// Verify checks a WOTS+ signature.
-func Verify(pubKey, msgHash, sig []byte) bool {
-	if len(pubKey) != PubKeySize || len(sig) != SigSize || len(msgHash) != 32 {
-		return false
-	}
-	digits := messageToDigits(msgHash)
-	allDigits := append(digits, checksumDigits(digits)...)
-	for i, d := range allDigits {
-		elem := sig[i*KeySize : (i+1)*KeySize]
-		computed := chain(elem, W-1-int(d))
-		expected := pubKey[i*KeySize : (i+1)*KeySize]
-		if !bytes.Equal(computed, expected) {
-			return false
-		}
-	}
-	return true
 }
