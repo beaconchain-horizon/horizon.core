@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Horizon Core — Offline Signer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(circle at top right, #0a1f33, #05101a 70%);
+    color: #e0f2ff; font-family: 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif;
+    min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px;
+  }
+  .card {
+    width: 100%; max-width: 850px; background: rgba(15, 41, 64, 0.6);
+    backdrop-filter: blur(16px); border: 1px solid rgba(30, 77, 122, 0.6);
+    border-radius: 20px; padding: 32px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  }
+  h1 { color: #4ad9ff; text-align: center; font-size: 26px; font-weight: 700; margin-bottom: 8px; text-shadow: 0 0 20px rgba(74, 217, 255, 0.4); }
+  .subtitle { text-align: center; color: #7aa; font-size: 12px; margin-bottom: 24px; letter-spacing: 1px; }
+  .tags { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
+  .tag { background: linear-gradient(135deg, #1e4d7a, #0f2940); color: #9ec8e8; padding: 4px 12px; border-radius: 20px; font-size: 11px; border: 1px solid rgba(74, 217, 255, 0.2); }
+  h2 { color: #9ec8e8; font-size: 14px; font-weight: 400; margin-top: 24px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  h2::before { content: ''; width: 4px; height: 16px; background: #4ad9ff; border-radius: 2px; box-shadow: 0 0 10px #4ad9ff; }
+  label { display: block; margin: 12px 0 6px; color: #8ab; font-size: 12px; }
+  input, select, textarea {
+    width: 100%; padding: 12px 14px; background: rgba(8, 25, 42, 0.8); color: #fff;
+    border: 1px solid rgba(30, 77, 122, 0.6); border-radius: 10px; font-family: 'Vazirmatn', monospace; font-size: 13px;
+    transition: all 0.3s ease; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: #4ad9ff; box-shadow: 0 0 0 3px rgba(74, 217, 255, 0.15); background: rgba(8, 25, 42, 1); }
+  .row { display: flex; gap: 12px; } .row > * { flex: 1; }
+  button {
+    margin-top: 20px; width: 100%; padding: 14px; background: linear-gradient(135deg, #1e5f8a, #14476b); color: #fff;
+    border: 1px solid rgba(74, 217, 255, 0.3); border-radius: 10px; font-family: 'Vazirmatn', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer;
+    transition: all 0.3s ease;
+  }
+  button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(30, 95, 138, 0.5); border-color: #4ad9ff; }
+  button:disabled { background: #1a2a3a; color: #555; border-color: #223; cursor: not-allowed; }
+  #btnSend { background: linear-gradient(135deg, #2a5a3a, #1a3f28); }
+  #btnSend:hover:not(:disabled) { box-shadow: 0 8px 20px rgba(42, 90, 58, 0.5); }
+  .status { margin-top: 20px; padding: 16px; border-radius: 12px; background: rgba(7, 22, 36, 0.9); border: 1px solid rgba(30, 77, 122, 0.4); font-family: 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; line-height: 1.6; }
+  .ok { color: #4ade80; border-color: rgba(74, 222, 128, 0.3); }
+  .err { color: #f87171; border-color: rgba(248, 113, 113, 0.3); }
+  .divider { height: 1px; background: linear-gradient(90deg, transparent, #1e4d7a, transparent); margin: 24px 0; }
+  .send-section { background: rgba(0,0,0,0.2); padding: 16px; border-radius: 12px; border: 1px dashed rgba(74, 217, 255, 0.2); margin-top: 16px; }
+  .helper-text { font-size: 11px; color: #eab308; margin-top: 8px; display: none; }
+  
+  .wg-link-wrap {
+    margin-top: 12px; text-align: center; border-bottom: 1px dashed rgba(74, 217, 255, 0.1); padding-bottom: 16px; margin-bottom: 16px;
+  }
+  .wg-link {
+    display: inline-flex; align-items: center; gap: 6px; color: #4ad9ff; text-decoration: none; font-size: 12px;
+    background: rgba(74, 217, 255, 0.1); padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(74, 217, 255, 0.3);
+    transition: all 0.3s ease;
+  }
+  .wg-link:hover { background: rgba(74, 217, 255, 0.2); transform: translateY(-1px); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>⚡ Horizon Core</h1>
+  <div class="subtitle">OFFLINE SIGNER · v1.4</div>
+
+  <div class="tags">
+    <span class="tag">secp256k1</span>
+    <span class="tag">RFC 6979</span>
+    <span class="tag">low-S (BIP-62)</span>
+    <span class="tag">R||S 64-byte</span>
+  </div>
+
+  <h2>بارگذاری کلید خصوصی</h2>
+  <label>کلید ECDSA (هگز ۶۴ کاراکتر)</label>
+  <input id="privEcdsa" type="password" placeholder="مثال: 5f701107... (۶۴ کاراکتر)">
+  
+  <div class="divider"></div>
+
+  <h2>اطلاعات لایسنس</h2>
+  <div class="row">
+    <div>
+      <label>شناسه لایسنس</label>
+      <input id="licenseId" type="text" value="HORIZON-GOLD-001">
+    </div>
+    <div>
+      <label>سازمان هدف</label>
+      <select id="org" onchange="document.getElementById('customOrg').style.display = this.value === 'custom' ? 'block' : 'none'">
+        <option value="banking">A — بانکداری</option>
+        <option value="industrial">F — نفت</option>
+        <option value="energy">H — برق</option>
+        <option value="steel">I — فولاد</option>
+        <option value="custom">✏️ دستی (سازمان جدید)</option>
+      </select>
+    </div>
+  </div>
+  
+  <div id="customOrg" style="display:none; margin-top:8px;">
+    <input id="customOrgName" type="text" placeholder="نام سازمان جدید را وارد کنید...">
+  </div>
+
+  <div class="row" style="margin-top: 12px;">
+    <div>
+      <label>حجم (تعداد تراکنش)</label>
+      <select id="volume" onchange="document.getElementById('customVolume').style.display = this.value === 'custom' ? 'block' : 'none'">
+        <option value="1000000">۱ میلیون</option>
+        <option value="5000000">۵ میلیون</option>
+        <option value="10000000">۱۰ میلیون</option>
+        <option value="20000000">۲۰ میلیون</option>
+        <option value="50000000">۵۰ میلیون</option>
+        <option value="custom">✏️ دستی (حجم دلخواه)</option>
+      </select>
+    </div>
+    <div>
+      <label>مدت (روز)</label>
+      <input id="days" type="number" value="365">
+    </div>
+  </div>
+
+  <div id="customVolume" style="display:none; margin-top:8px;">
+    <input id="customVolumeInput" type="number" placeholder="حجم دلخواه را وارد کنید...">
+  </div>
+
+  <div class="divider"></div>
+
+  <h2>پیام و امضا</h2>
+  <label>پیام (خودکار به SHA-256 تبدیل می‌شود)</label>
+  <textarea id="message" rows="2">License for HORIZON-GOLD-001</textarea>
+
+  <button id="btnSign" disabled>✍️ تولید امضا و آدرس</button>
+
+  <div class="send-section">
+    <h2 style="margin-top:0;">ارسال به Switch</h2>
+    
+    <!-- دکمه‌ی باز کردن WireGuard -->
+    <div class="wg-link-wrap">
+      <a href="wireguard://" class="wg-link">
+        🛡️ باز کردن کلاینت WireGuard (برای اتصال به تونل)
+      </a>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>آدرس دروازه‌ی داخلی (Gateway)</label>
+        <input id="switchUrl" type="text" value="http://127.0.0.1:8091">
+      </div>
+      <div>
+        <label>توکن امنیتی (X-Admin-Token)</label>
+        <input id="adminToken" type="text" placeholder="توکن ادمین (حداقل ۳۲ کاراکتر)">
+      </div>
+    </div>
+    
+    <div id="corsHelper" class="helper-text">
+      ⚠️ خطای قرمز معمولاً به دلیل باز کردن فایل به صورت مستقیم (file://) است. 
+      لطفاً برای ارسال موفق، صفحه را با یک وب‌سرور محلی (مثلاً اجرای <code>python -m http.server</code>) باز کنید.
+    </div>
+    <button id="btnSend" disabled>📤 ارسال لایسنس به Switch</button>
+  </div>
+
+  <div id="status" class="status">منتظر بارگذاری کلید...</div>
+</div>
+
+<script type="module">
+import * as secp from 'https://cdn.jsdelivr.net/npm/@noble/secp256k1@2.1.0/+esm';
+import { sha256 } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.3.0/sha256/+esm';
+import { keccak_256 } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.3.0/sha3/+esm';
+
+const $ = (id) => document.getElementById(id);
+let currentPayload = null;
+
+const setStatus = (msg, cls='') => { $('status').className = 'status ' + cls; $('status').textContent = msg; };
+const hexToBytes = (hex) => Uint8Array.from(hex.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+const bytesToHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+
+function checkReady() {
+  const priv = $('privEcdsa').value.trim().replace(/^0x/, '');
+  $('btnSign').disabled = !/^[0-9a-fA-F]{64}$/.test(priv);
+}
+$('privEcdsa').addEventListener('input', checkReady);
+
+$('btnSign').addEventListener('click', async () => {
+  try {
+    setStatus('⏳ در حال محاسبه امضا...');
+    const privHex = $('privEcdsa').value.trim().replace(/^0x/, '');
+    const privBytes = hexToBytes(privHex);
+
+    const pubBytes = secp.getPublicKey(privBytes, false);
+    const pubHex = bytesToHex(pubBytes);
+    const ethHash = keccak_256(pubBytes.slice(1));
+    const ethAddr = '0x' + bytesToHex(ethHash.slice(-20));
+
+    const msgBytes = new TextEncoder().encode($('message').value);
+    const msgHash = sha256(msgBytes);
+    
+    const sig = await secp.signAsync(msgHash, privBytes, { lowS: true });
+    const sigHex = sig.toCompactHex();
+
+    let orgValue = $('org').value;
+    if (orgValue === 'custom') orgValue = $('customOrgName').value || 'custom-org';
+
+    let volValue = $('volume').value;
+    if (volValue === 'custom') volValue = parseInt($('customVolumeInput').value, 10) || 0;
+    else volValue = parseInt(volValue, 10);
+
+    currentPayload = {
+      chain_id: 'horizon-core-v1.4',
+      license_id: $('licenseId').value,
+      org: orgValue,
+      volume: volValue,
+      days: parseInt($('days').value, 10),
+      message_hash: bytesToHex(msgHash),
+      pubkey: pubHex,
+      eth_address: ethAddr,
+      ecdsa_signature: sigHex,
+      wots_signature: 'pending',
+      timestamp: new Date().toISOString()
+    };
+
+    setStatus(JSON.stringify(currentPayload, null, 2), 'ok');
+    $('btnSend').disabled = false;
+  } catch (e) {
+    setStatus('❌ خطا: ' + e.message, 'err');
+    $('btnSend').disabled = true;
+  }
+});
+
+$('btnSend').addEventListener('click', async () => {
+  if (!currentPayload) return;
+  const baseUrl = $('switchUrl').value.trim().replace(/\/$/, '');
+  if (!baseUrl) {
+    setStatus('⚠️ لطفاً آدرس دروازه (Gateway) را وارد کنید.', 'err');
+    return;
+  }
+
+  const token = $('adminToken').value.trim();
+  if (!token) {
+    setStatus('⚠️ توکن امنیتی (X-Admin-Token) را وارد کنید. سرور بدون آن درخواست را رد می‌کند (خطای 401).', 'err');
+    return;
+  }
+  
+  // *** مسیر اصلاح شده برای ثبت لایسنس ***
+  const url = baseUrl + '/api/v1/license/save';
+  setStatus('📡 در حال ارسال به ' + url + ' ...');
+  
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'X-Admin-Token': token 
+      },
+      body: JSON.stringify(currentPayload)
+    });
+    
+    const txt = await res.text();
+    
+    if (res.ok) {
+      setStatus('✅ لایسنس با موفقیت در Switch ثبت شد!\n\nپاسخ سرور:\n' + txt, 'ok');
+    } else {
+      if (res.status === 401) {
+        setStatus('❌ خطای 401 (Unauthorized):\nتوکن امنیتی (X-Admin-Token) شما نامعتبر است یا منقضی شده است.\n\nپاسخ سرور:\n' + txt, 'err');
+      } else {
+        setStatus('❌ خطای سرور (HTTP ' + res.status + '):\n\n' + txt, 'err');
+      }
+    }
+  } catch (e) {
+    setStatus('⚠️ خطا در اتصال:\n' + e.message + '\n\n(آیا تونل WireGuard متصل است؟)', 'err');
+    if (window.location.protocol === 'file:') {
+      document.getElementById('corsHelper').style.display = 'block';
+    }
+  }
+});
+</script>
+</body>
+</html>
