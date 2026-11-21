@@ -135,3 +135,7 @@ cert.sig
 cert.hash
 vendor/
 *.exe~
+mykey.txt
+pqkey.txt
+*.key
+*.pem
