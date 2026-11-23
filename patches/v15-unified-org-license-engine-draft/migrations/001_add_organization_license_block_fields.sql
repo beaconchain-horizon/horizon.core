@@ -61,7 +61,7 @@ BEGIN
             ON UPDATE RESTRICT ON DELETE RESTRICT
             DEFERRABLE INITIALLY DEFERRED;
     END IF;
-END $;
+END $migration$;
 
 -- No historical backfill is performed. Existing rows remain NULL/0 until
 -- independently reconciled; do not assign them to organizations by guess.
