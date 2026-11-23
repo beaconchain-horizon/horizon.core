@@ -272,7 +272,8 @@ func adminIssueLicenseHandler(c *gin.Context) {
 	lic.Signature = sig
 	// WOTS remains intentionally empty: the current implementation is not
 	// a production-safe stateful one-time signature system.
-	lic.WOTSSignature, lic.WOTSPubKey = "", ""
+	lic.WOTSSignature = ""
+	lic.WOTSPubKey = ""
 
 	input := OrganizationLicenseInput{
 		LicenseID: lic.LicenseID, UserID: lic.UserID, ProductID: lic.ProductID,
