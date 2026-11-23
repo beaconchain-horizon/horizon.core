@@ -111,5 +111,20 @@ func validateLicenseChainForWrite(db *gorm.DB) error {
 	if orphanTransactions != 0 {
 		return fmt.Errorf("license-chain write gate: %d transactions have no matching chain block", orphanTransactions)
 	}
+	// Only after structural transaction-count checks pass, enforce the v1.5
+	// organization/license invariant for every non-Genesis block.
+	for i := 1; i < len(blocks); i++ {
+		b := blocks[i]
+		if strings.TrimSpace(b.OrganizationID) == "" || b.LicenseCount <= 0 || b.TxCount != 1 {
+			return fmt.Errorf("license-chain write gate: block %d is not a canonical single-organization license block", b.BlockNum)
+		}
+		var count int64
+		if err := db.Table("licenses").Where("organization_id = ? AND block_num = ?", b.OrganizationID, b.BlockNum).Count(&count).Error; err != nil {
+			return fmt.Errorf("license-chain write gate: inspect organization licenses at block %d: %w", b.BlockNum, err)
+		}
+		if count != int64(b.LicenseCount) {
+			return fmt.Errorf("license-chain write gate: block %d declares %d licenses but has %d", b.BlockNum, b.LicenseCount, count)
+		}
+	}
 	return nil
 }

@@ -66,7 +66,9 @@ type Transaction struct {
 
 type License struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
-	LicenseID     string    `gorm:"uniqueIndex" json:"license_id"`
+	LicenseID      string    `gorm:"uniqueIndex" json:"license_id"`
+	OrganizationID string    `gorm:"index" json:"organization_id"`
+	BlockNum       int64     `gorm:"index" json:"block_num"`
 	UserID        string    `gorm:"index" json:"user_id"`
 	ProductID     string    `json:"product_id"`
 	Volume        int       `json:"volume"`
@@ -231,68 +233,7 @@ func getLastBlock() (*Block, error) {
 }
 
 func mineBlock() (*Block, error) {
-	if err := validateMainBlockChainForWrite(db); err != nil {
-		return nil, err
-	}
-	last, err := getLastBlock()
-	if err != nil {
-		return nil, err
-	}
-
-	var pending []Transaction
-	db.Where("block_index = ?", -1).Find(&pending)
-
-	if len(pending) == 0 {
-		return nil, fmt.Errorf("no pending transactions")
-	}
-
-	txIDs := []string{}
-	for _, tx := range pending {
-		txIDs = append(txIDs, tx.TxID)
-	}
-	merkleAlgo := "v1"
-	if last.BlockNum+1 >= 4 {
-		merkleAlgo = "v2"
-	}
-	merkleRoot := simpleMerkleRoot(txIDs, merkleAlgo)
-
-	newIndex := last.BlockNum + 1
-	timestamp := time.Now().Unix()
-	dataStr := fmt.Sprintf("%d|%d|%s|%s", newIndex, timestamp, last.Hash, merkleRoot)
-	blockHash := hashData([]byte(dataStr))
-
-	block := &Block{
-		BlockNum:   newIndex,
-		Timestamp:  timestamp,
-		PrevHash:   last.Hash,
-		Hash:       blockHash,
-		MerkleRoot: merkleRoot,
-		MerkleAlgo: merkleAlgo,
-		TxCount:    len(pending),
-	}
-
-	// P1.6: sign block hash with unlocked ECDSA key (if available)
-	stateMutex.RLock()
-	signingKey := unlockedKey
-	signerAddr := unlockedAddr
-	stateMutex.RUnlock()
-	if signingKey != nil {
-		if sig, err := signData(signingKey, []byte(block.Hash)); err == nil {
-			block.Signature = sig
-			block.SignerAddr = signerAddr
-		}
-	}
-
-	if err := db.Create(block).Error; err != nil {
-		return nil, err
-	}
-
-	for _, tx := range pending {
-		db.Model(&tx).Update("block_index", newIndex)
-	}
-
-	log.Printf("Block #%d mined: %d transactions", newIndex, len(pending))
-	return block, nil
+	return nil, fmt.Errorf("legacy blocks table writer disabled; v1.5 uses the canonical organization block writer")
 }
 
 // ============================================================
@@ -573,151 +514,10 @@ func listTxHandler(c *gin.Context) {
 // ============ BLOCKS ============
 
 func mineBlockHandler(c *gin.Context) {
-	if err := validateMainBlockChainForWrite(db); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "block production paused by canonical v1.4 safety gate", "reason": err.Error()})
-		return
-	}
-	var txs []Transaction
-	if err := db.Where("synced = ?", false).Limit(5000).Find(&txs).Error; err != nil {
-		c.JSON(500, gin.H{"error": "db error fetching txs"})
-		return
-	}
-	if len(txs) == 0 {
-		c.JSON(400, gin.H{"error": "no pending transactions"})
-		return
-	}
-
-	var licenses []License
-	if err := db.Where("status = ?", "active").Find(&licenses).Error; err != nil {
-		c.JSON(500, gin.H{"error": "db error fetching licenses"})
-		return
-	}
-
-	var consTxs []ConsensusTx
-	for _, t := range txs {
-		licID := t.LicenseID
-		if licID == "" {
-			for _, l := range licenses {
-				if l.UserID == t.From {
-					licID = l.LicenseID
-					break
-				}
-			}
-			if licID == "" && len(licenses) > 0 {
-				licID = licenses[0].LicenseID
-			}
-		}
-		consTxs = append(consTxs, ConsensusTx{From: t.From, To: t.To, Amount: t.Amount, LicenseID: licID, Type: t.Type, Payload: t.Payload})
-	}
-
-	var consLicenses []ConsensusLicense
-	for _, l := range licenses {
-		consLicenses = append(consLicenses, ConsensusLicense{LicenseID: l.LicenseID, UserID: l.UserID, ProductID: l.ProductID, Volume: int64(l.Volume), Used: int64(l.Used), Duration: int64(l.Duration), IssuedAt: l.IssuedAt, ExpiresAt: l.ExpiresAt, Status: l.Status, Signature: l.Signature, MerkleRoot: l.MerkleRoot, WOTSSignature: l.WOTSSignature, WOTSPubKey: l.WOTSPubKey})
-	}
-
-	var lastBlock Block
-	db.Order("block_num desc").First(&lastBlock)
-	prevHash := "genesis"
-	blockNum := 0
-	if lastBlock.BlockNum >= 0 {
-		prevHash = lastBlock.Hash
-		blockNum = lastBlock.BlockNum + 1
-	}
-
-	ts := time.Now().Unix()
-
-	leaves := make([][]byte, len(consTxs))
-	for i, tx := range consTxs {
-		b, _ := json.Marshal(tx)
-		h := sha256.Sum256(b)
-		leaves[i] = h[:]
-	}
-
-	merkleRoot := ""
-	if len(leaves) > 0 {
-		level := make([][]byte, len(leaves))
-		for i, l := range leaves {
-			level[i] = l
-		}
-		for len(level) > 1 {
-			next := make([][]byte, 0, (len(level)+1)/2)
-			for i := 0; i < len(level); i += 2 {
-				a := level[i]
-				b := a
-				if i+1 < len(level) {
-					b = level[i+1]
-				}
-				h := sha256.New()
-				h.Write(a)
-				h.Write(b)
-				next = append(next, h.Sum(nil))
-			}
-			level = next
-		}
-		merkleRoot = hex.EncodeToString(level[0])
-	} else {
-		merkleRoot = strings.Repeat("0", 64)
-	}
-
-	h := sha256.New()
-	h.Write([]byte(prevHash))
-	h.Write([]byte(merkleRoot))
-	h.Write([]byte(fmt.Sprintf("%d", ts)))
-	h.Write([]byte(fmt.Sprintf("%d", len(consTxs))))
-	blockHash := hex.EncodeToString(h.Sum(nil))
-
-	var sigHex, signerAddr string
-	stateMutex.RLock()
-	key := unlockedKey
-	stateMutex.RUnlock()
-
-	if key != nil {
-		hashB, _ := hex.DecodeString(blockHash)
-		sig, err := authority.SignECDSAHash(key, hashB)
-		if err == nil {
-			sigHex = hex.EncodeToString(sig)
-			signerAddr = "0x" + hex.EncodeToString(key.PublicKey.X.Bytes())
-		}
-	} else {
-		c.JSON(400, gin.H{"error": "key not unlocked"})
-		return
-	}
-
-	blockLicID := fmt.Sprintf("BLOCK-LIC-%d-%d", blockNum, ts)
-	payload := ConsensusPayload{
-		BlockLicenseID: blockLicID,
-		BlockNumber:    uint64(blockNum), BlockHash: blockHash, PrevHash: prevHash,
-		MerkleRoot: merkleRoot, MerkleType: "binary", Timestamp: ts, TxCount: len(consTxs),
-		Signature: sigHex, SignerAddr: signerAddr, Licenses: consLicenses, Txs: consTxs,
-	}
-
-	accepted, votes, err := RequestConsensus(payload)
-	if err != nil || !accepted {
-		c.JSON(402, gin.H{"error": "consensus rejected", "votes": votes, "reason": fmt.Sprintf("%v", err)})
-		return
-	}
-
-	newBlock := Block{
-		BlockLicenseID: blockLicID,
-		BlockNum:       blockNum, Timestamp: ts, PrevHash: prevHash, Hash: blockHash,
-		MerkleRoot: merkleRoot, MerkleAlgo: "v1", TxCount: len(txs),
-		CreatedAt: time.Now(), Signature: sigHex, SignerAddr: signerAddr,
-	}
-	if err := db.Create(&newBlock).Error; err != nil {
-		c.JSON(500, gin.H{"error": "failed to save block"})
-		return
-	}
-
-	for _, t := range txs {
-		db.Model(&t).Updates(map[string]interface{}{"synced": true, "block_index": blockNum})
-		for i := range licenses {
-			if licenses[i].UserID == t.From {
-				_ = licenses[i] // used tracked on acceptance
-			}
-		}
-	}
-
-	c.JSON(200, gin.H{"status": "mined", "block_num": blockNum, "hash": blockHash, "tx_count": len(txs), "votes": votes})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "legacy block production is disabled",
+		"code": "V15_ORGANIZATION_BLOCK_WRITER_REQUIRED",
+	})
 }
 
 func listBlocksHandler(c *gin.Context) {
@@ -732,74 +532,14 @@ func listBlocksHandler(c *gin.Context) {
 // ============ LICENSES ============
 
 func saveLicenseHandler(c *gin.Context) {
-	var req struct {
-		LicenseID  string `json:"license_id" binding:"required"`
-		UserID     string `json:"user_id" binding:"required"`
-		ProductID  string `json:"product_id"`
-		Volume     int    `json:"volume"`
-		Duration   int    `json:"duration"`
-		MerkleRoot string `json:"merkle_root"`
-		Signature  string `json:"signature" binding:"required"`
-		SignedData string `json:"signed_data" binding:"required"`
-		HardwareID string `json:"hardware_id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var sd map[string]interface{}
-	json.Unmarshal([]byte(req.SignedData), &sd)
-
-	var issuedAt, expiresAt int64
-	var duration int
-	var merkleRoot, hardwareID string
-
-	if val, ok := sd["issued_at"].(float64); ok {
-		issuedAt = int64(val)
-	}
-	if val, ok := sd["expires_at"].(float64); ok {
-		expiresAt = int64(val)
-	}
-	if val, ok := sd["duration"].(float64); ok {
-		duration = int(val)
-	}
-	if val, ok := sd["merkle_root"].(string); ok {
-		merkleRoot = val
-	}
-	if val, ok := sd["hardware_id"].(string); ok {
-		hardwareID = val
-	}
-
-	if merkleRoot == "" {
-		merkleRoot = req.MerkleRoot
-	}
-	if hardwareID == "" {
-		hardwareID = req.HardwareID
-	}
-
-	lic := &License{
-		LicenseID:  req.LicenseID,
-		UserID:     req.UserID,
-		ProductID:  req.ProductID,
-		Volume:     req.Volume,
-		Duration:   duration,
-		MerkleRoot: merkleRoot,
-		IssuedAt:   issuedAt,
-		ExpiresAt:  expiresAt,
-		Status:     "active",
-		HardwareID: hardwareID,
-		Signature:  req.Signature,
-	}
-
-	if err := db.Create(lic).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed: " + err.Error()})
-		return
-	}
-
-	log.Printf("License saved: %s", lic.LicenseID)
-	go checkLicenseNow()
-	c.JSON(http.StatusCreated, lic)
+	// Fail closed: the legacy endpoint inserts directly into licenses and
+	// cannot establish organization/block membership. v1.5 issuance must use
+	// CreateOrganizationBlockWithLicenses so block + event + license rows are
+	// committed atomically. No legacy license write is allowed to bypass it.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "direct license writes are disabled; use the v1.5 organization batch writer",
+		"code":  "UNIFIED_ORGANIZATION_WRITER_REQUIRED",
+	})
 }
 
 func listLicensesHandler(c *gin.Context) {
@@ -1023,22 +763,14 @@ func main() {
 	}
 	initCustomers()
 
-	// init adaptive chain batcher (async batching)
-	if runtimeWritesAllowed.Load() {
-		InitBatcher(db, BatcherConfig{
-			MaxSize:       50000,
-			FlushInterval: 200 * time.Millisecond,
-		})
-	} else {
-		log.Printf("[RECOVERY] batcher disabled: canonical chain validation has not passed")
-	}
+	// Generic transaction batching creates non-organization blocks and is
+	// incompatible with the v1.5 one-organization/one-license-batch invariant.
+	// Keep it disabled until a typed organization-scoped anchor writer exists.
+	log.Printf("[V15] generic chain batcher disabled: organization-scoped writer required")
 
-	// start industrial anchor worker
-	if runtimeWritesAllowed.Load() {
-		startIndustrialAnchorWorker()
-	} else {
-		log.Printf("[RECOVERY] industrial anchor worker disabled")
-	}
+	// Industrial readings remain in their source store until an organization-
+	// scoped anchor contract and verifier are implemented.
+	log.Printf("[V15] industrial anchor worker disabled: organization-scoped anchor contract required")
 	initAuditMiddleware()
 	if err := loadLedgerFromDB(ledger); err != nil {
 		log.Printf("ledger load warning: %v", err)
