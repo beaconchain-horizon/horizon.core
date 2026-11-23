@@ -1,8 +1,8 @@
 package main
 
 import (
-	"testing"
 	"crypto/ecdsa"
+	"testing"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"

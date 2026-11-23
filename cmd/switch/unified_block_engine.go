@@ -126,7 +126,8 @@ func CreateOrganizationBlockWithLicenses(
 			return fmt.Errorf("unified writer: sign block: %w", err)
 		}
 		created = ChainBlock{
-			BlockNum: blockNum, PrevHash: last.Hash, MerkleRoot: merkle,
+			BlockNum: blockNum, OrganizationID: organizationID, LicenseCount: len(licenses),
+			PrevHash: last.Hash, MerkleRoot: merkle,
 			TxCount: 1, Timestamp: ts, Hash: blockHash,
 			Signature: blockSig, SignerAddr: publicAddressFromKey(ownerKey),
 		}
