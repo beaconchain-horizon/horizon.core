@@ -198,55 +198,12 @@ When the company is registered, this page is replaced by the real ZarinPal gatew
 //
 // POST /api/v1/payment/mock/confirm
 func mockConfirmHandler(c *gin.Context) {
-	authority := c.PostForm("authority")
-	invoiceID := c.PostForm("invoice_id")
-
-	if authority == "" || invoiceID == "" {
-		c.String(http.StatusBadRequest, "missing authority or invoice_id")
-		return
-	}
-
-	var inv Invoice
-	if err := db.Where("invoice_id = ?", invoiceID).First(&inv).Error; err != nil {
-		c.String(http.StatusNotFound, "invoice not found")
-		return
-	}
-
-	if inv.PaymentRef != authority {
-		c.String(http.StatusBadRequest, "authority mismatch")
-		return
-	}
-
-	if inv.Status == "paid" {
-		c.String(http.StatusOK, "already paid")
-		return
-	}
-
-	// Mark invoice as paid
-	now := time.Now().Unix()
-	db.Model(&Invoice{}).
-		Where("invoice_id = ?", invoiceID).
-		Updates(map[string]interface{}{
-			"status":      "paid",
-			"payment_ref": authority,
-			"paid_at":     now,
-		})
-
-	addAudit("payment_mock_paid", invoiceID,
-		fmt.Sprintf("amount=%d", inv.AmountIRR),
-		c.ClientIP())
-
-	// Auto-issue renewed license
-	newLic, licErr := issueRenewalLicense(&inv)
-	if licErr != nil {
-		addAudit("payment_mock_renew_fail", invoiceID, licErr.Error(), c.ClientIP())
-		c.String(http.StatusInternalServerError, "payment ok but license issue failed: "+licErr.Error())
-		return
-	}
-	addAudit("payment_mock_renew_ok", newLic.LicenseID, "renewed from "+inv.LicenseID, c.ClientIP())
-
-	// Redirect to success page
-	c.Redirect(http.StatusFound, "/payment/success?invoice_id="+invoiceID)
+	// Do not mark an invoice paid before a canonical replacement license can
+	// be committed atomically with the previous license's expiry.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "mock payment confirmation is disabled; renewal issuance is not yet atomic",
+		"code": "V15_ATOMIC_RENEWAL_REQUIRED",
+	})
 }
 
 // ============================================================
