@@ -13,6 +13,7 @@ import (
 const genesisHash = "8c0763dd5b1345cba0782f03163e8a69de49bede54c91bb878126742c7990603"
 
 func main() {
+	fmt.Println("LEGACY INTERNAL/CHAIN SQLITE AUDIT — NOT THE CANONICAL HORIZON v1.5 VERIFIER")
 	dbPath := os.Getenv("SWITCH_DB")
 	if dbPath == "" {
 		dbPath = "./horizon-dev.db"
