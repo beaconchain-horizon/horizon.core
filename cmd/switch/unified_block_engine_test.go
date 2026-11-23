@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/ecdsa"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
+	"fmt"
 
 	internalcrypto "horizon-core/internal/crypto"
 
@@ -121,6 +123,24 @@ func TestLicenseChainWriteGateRejectsLegacyNonOrganizationBlocks(t *testing.T) {
 	}
 }
 
+func TestOrganizationBlockWriterPostgresProcessWorker(t *testing.T) {
+	if os.Getenv("HORIZON_POSTGRES_WORKER") != "1" {
+		return
+	}
+	dsn := os.Getenv("HORIZON_TEST_POSTGRES_DSN")
+	if dsn == "" || !strings.Contains(dsn, "horizon_test") {
+		t.Fatal("worker requires the disposable horizon_test database")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("worker open PostgreSQL: %v", err)
+	}
+	_, err = CreateOrganizationBlockWithLicenses(db, testOrganizationSigningKey(t), "org-postgres", []OrganizationLicenseInput{testLicense(os.Getenv("HORIZON_POSTGRES_LICENSE_ID"))})
+	if err != nil {
+		t.Fatalf("worker append organization block: %v", err)
+	}
+}
+
 func TestOrganizationBlockWriterPostgresIntegration(t *testing.T) {
 	dsn := os.Getenv("HORIZON_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -146,25 +166,33 @@ func TestOrganizationBlockWriterPostgresIntegration(t *testing.T) {
 	if err := db.Create(&genesis).Error; err != nil {
 		t.Fatalf("insert PostgreSQL Genesis fixture: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil { t.Fatal(err) }
+	if err := sqlDB.Close(); err != nil { t.Fatal(err) }
 
-	key := testOrganizationSigningKey(t)
+	// Separate test-binary processes have independent chainMutex values. This
+	// exercises the PostgreSQL transaction-scoped advisory lock, not just the
+	// in-process mutex.
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
-	for _, id := range []string{"pg-a", "pg-b"} {
+	for _, id := range []string{"pg-process-a", "pg-process-b"} {
 		wg.Add(1)
 		go func(licenseID string) {
 			defer wg.Done()
-			_, err := CreateOrganizationBlockWithLicenses(db, key, "org-postgres", []OrganizationLicenseInput{testLicense(licenseID)})
-			errs <- err
+			cmd := exec.Command(os.Args[0], "-test.run=^TestOrganizationBlockWriterPostgresProcessWorker$")
+			cmd.Env = append(os.Environ(), "HORIZON_POSTGRES_WORKER=1", "HORIZON_POSTGRES_LICENSE_ID="+licenseID)
+			output, err := cmd.CombinedOutput()
+			if err != nil { errs <- fmt.Errorf("worker %s: %w: %s", licenseID, err, output); return }
+			errs <- nil
 		}(id)
 	}
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent PostgreSQL writer failed: %v", err)
-		}
+		if err != nil { t.Fatal(err) }
 	}
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil { t.Fatalf("reopen PostgreSQL for assertions: %v", err) }
 	var blocks, txs, licenses int64
 	db.Model(&ChainBlock{}).Count(&blocks)
 	db.Model(&ChainTx{}).Count(&txs)
