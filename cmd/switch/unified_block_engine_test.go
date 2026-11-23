@@ -201,3 +201,37 @@ func TestOrganizationBlockWriterPostgresIntegration(t *testing.T) {
 		t.Fatalf("PostgreSQL atomic result mismatch: blocks=%d txs=%d licenses=%d", blocks, txs, licenses)
 	}
 }
+
+func TestOrganizationBlockWriterRejectsDuplicateLicenseIDs(t *testing.T) {
+	db := openUnifiedWriterTestDB(t)
+	key := testOrganizationSigningKey(t)
+	_, err := CreateOrganizationBlockWithLicenses(db, key, "org-a", []OrganizationLicenseInput{testLicense("same-id"), testLicense("same-id")})
+	if err == nil {
+		t.Fatal("expected duplicate IDs inside the batch to be rejected")
+	}
+	var blocks, txs, licenses int64
+	db.Model(&ChainBlock{}).Count(&blocks)
+	db.Model(&ChainTx{}).Count(&txs)
+	db.Model(&License{}).Count(&licenses)
+	if blocks != 1 || txs != 0 || licenses != 0 {
+		t.Fatalf("duplicate batch left partial rows: blocks=%d txs=%d licenses=%d", blocks, txs, licenses)
+	}
+}
+
+func TestOrganizationBlockWriterRejectsPreviouslyIssuedLicenseID(t *testing.T) {
+	db := openUnifiedWriterTestDB(t)
+	if err := db.Create(&License{LicenseID: "already-issued"}).Error; err != nil {
+		t.Fatalf("seed existing license: %v", err)
+	}
+	_, err := CreateOrganizationBlockWithLicenses(db, testOrganizationSigningKey(t), "org-a", []OrganizationLicenseInput{testLicense("already-issued")})
+	if err == nil {
+		t.Fatal("expected globally reused license ID to be rejected")
+	}
+	var blocks, txs, licenses int64
+	db.Model(&ChainBlock{}).Count(&blocks)
+	db.Model(&ChainTx{}).Count(&txs)
+	db.Model(&License{}).Count(&licenses)
+	if blocks != 1 || txs != 0 || licenses != 1 {
+		t.Fatalf("duplicate ID attempt changed ledger rows: blocks=%d txs=%d licenses=%d", blocks, txs, licenses)
+	}
+}
