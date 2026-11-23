@@ -115,6 +115,10 @@ func main() {
     blocks := loadBlocks(db)
     licenses := loadLicenses(db)
     chainTxs := loadChainTxs(db)
+    if len(blocks) == 0 {
+        fmt.Fprintln(os.Stderr, "❌ no chain blocks loaded; refusing an empty or unreadable database")
+        os.Exit(3)
+    }
 
     fmt.Println("╔═══════════════════════════════════════════════════════════════════╗")
     fmt.Println("║  HORIZON CORE — MATHEMATICAL VERIFIER v2.0                        ║")
