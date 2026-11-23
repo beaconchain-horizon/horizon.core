@@ -295,43 +295,11 @@ func adminIssueLicenseHandler(c *gin.Context) {
 }
 
 func revokeLicenseHandler(c *gin.Context) {
-	var req struct {
-		LicenseID string `json:"license_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	res := db.Model(&License{}).
-		Where("license_id = ?", req.LicenseID).
-		Update("status", "revoked")
-	if res.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
-		return
-	}
-	if res.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "license not found"})
-		return
-	}
-	// append revoke to blockchain chain
-	stateMutex.RLock()
-	revokeKey := unlockedKey
-	stateMutex.RUnlock()
-	if revokeKey != nil {
-		revokePayload := map[string]interface{}{
-			"license_id": req.LicenseID,
-			"action":     "revoke",
-		}
-		if chainTx, _, err := appendChainTx(db, revokeKey, TxLicenseRevoke, revokePayload); err != nil {
-			log.Printf("⚠️  chain: revoke append failed: %v", err)
-		} else {
-			log.Printf("⛓  revoke appended in block #%d", chainTx.BlockNum)
-		}
-	}
-
-	addAudit("revoke_license", req.LicenseID, "license revoked", c.ClientIP())
-	c.JSON(http.StatusOK, gin.H{
-		"status":     "revoked",
-		"license_id": req.LicenseID,
+	// Revocation currently has no canonical organization-block event contract.
+	// Refuse the legacy direct status update rather than changing registry state
+	// without an immutable, verifiable chain record.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "license revocation is paused until the canonical organization event is implemented",
+		"code": "V15_CANONICAL_REVOCATION_REQUIRED",
 	})
 }
