@@ -149,62 +149,10 @@ func createGenesisBlock(db *gorm.DB, ownerKey *ecdsa.PrivateKey) (*ChainBlock, e
 // ═══════════════════════════════════════════════════════════════════
 
 func addChainBlock(db *gorm.DB, ownerKey *ecdsa.PrivateKey, txs []ChainTx) (*ChainBlock, error) {
-	chainMutex.Lock()
-	if err := validateLicenseChainForWrite(db); err != nil {
-		chainMutex.Unlock()
-		return nil, err
-	}
-	defer chainMutex.Unlock()
-
-	// get last block (cached)
-	var last ChainBlock
-	if err := db.Order("block_num DESC").First(&last).Error; err != nil {
-		return nil, fmt.Errorf("no chain: %w", err)
-	}
-
-	// compute tx hashes + sign each tx
-	txHashes := make([]string, 0, len(txs))
-	for i := range txs {
-		txHashes = append(txHashes, txs[i].TxHash)
-	}
-	merkle := computeBlockMerkleRoot(txHashes)
-
-	blockNum := last.BlockNum + 1
-	ts := time.Now().Unix()
-	blockHash := computeBlockHash(blockNum, last.Hash, merkle, ts)
-	sig, err := signData(ownerKey, []byte(canonicalBlockMessage(blockNum, last.Hash, merkle, ts)))
-	if err != nil {
-		return nil, err
-	}
-	addr := publicAddressFromKey(ownerKey)
-
-	block := &ChainBlock{
-		BlockNum:   blockNum,
-		PrevHash:   last.Hash,
-		MerkleRoot: merkle,
-		TxCount:    len(txs),
-		Timestamp:  ts,
-		Hash:       blockHash,
-		Signature:  sig,
-		SignerAddr: addr,
-	}
-	if err := db.Create(block).Error; err != nil {
-		return nil, err
-	}
-
-	// attach block_num and insert txs
-	// BULK insert (100x faster)
-	for i := range txs {
-		txs[i].BlockNum = blockNum
-	}
-	if len(txs) > 0 {
-		if err := db.CreateInBatches(txs, 1000).Error; err != nil {
-			return nil, err
-		}
-	}
-
-	log.Printf("⛓  Block #%d added (%d txs, merkle=%s)", blockNum, len(txs), merkle[:12])
-	return block, nil
+	// Legacy generic blocks cannot satisfy the v1.5 invariant that every
+	// post-Genesis block belongs to exactly one organization and contains
+	// exactly that organization's license batch. Keep this path read-only.
+	return nil, fmt.Errorf("legacy generic block writer disabled; use CreateOrganizationBlockWithLicenses")
 }
 
 // ═══════════════════════════════════════════════════════════════════
