@@ -1,30 +1,45 @@
-# Horizon v1.5 — unified organization/license block writer (engineering draft)
+# Horizon v1.5 — organization-scoped license blocks
 
-This patch introduces one atomic write primitive for organization license blocks:
+## Canonical write contract
 
-`CreateOrganizationBlockWithLicenses(db, ownerKey, organizationID, licenses)`
+`CreateOrganizationBlockWithLicenses(db, ownerKey, organizationID, licenses)` is the sole supported writer for new v1.5 license blocks.
 
-For one call it writes, in one GORM transaction:
+Each call is one SQL transaction and writes:
+1. one `chain_blocks` row with one `organization_id`, `license_count = N`, and `tx_count = 1`;
+2. one signed `organization.licenses.issue` event containing the exact ordered batch;
+3. exactly N `licenses` rows linked to that same organization and block.
 
-1. one `chain_blocks` row (one organization, `license_count = N`, `tx_count = 1`),
-2. one `chain_txes` event whose canonical JSON payload contains the exact ordered license batch,
-3. exactly N rows in `licenses`, each linked to the same `organization_id` and `block_num`.
+The batch event is signed by the authority key. Its transaction hash is the single Merkle leaf; the block header hash and signature cover that Merkle root. Per-license signatures are preserved. WOTS values are persisted as supplied; production issuance deliberately leaves the experimental WOTS fields empty.
 
-The block's Merkle root covers the hash of the batch event; the event payload contains the full license batch. Existing per-license signatures are preserved. The owner key signs the chain event and block using the existing `signData`, `canonicalTxMessage`, and `canonicalBlockMessage` functions. No Genesis is created or rewritten.
+## Safety gates now in place
 
-## Important integration status
+- Direct `/license/save` writes are rejected.
+- Admin license issuance uses the canonical organization writer and requires `organization_id`.
+- Legacy `blocks` mining and generic `chain_blocks` append writers are disabled.
+- `internal/chain.AppendBlock` is disabled as a competing writer.
+- Generic batcher and unscoped industrial anchor worker are disabled.
+- Direct revocation and renewal confirmation are paused until their state changes can be committed as organization-scoped events in the same transaction.
+- The writer refuses any existing non-Genesis block without organization membership, exact license count, and one-event cardinality.
+- PostgreSQL migration adds organization fields, constraints, a composite foreign key, and indexes without backfilling legacy rows.
 
-This is an integration patch draft based on the captured `HORIZON_V15_SOURCE.txt`, not a completed repository merge. The captured source reveals at least three distinct writers (`mineBlock`, `mineBlockHandler`, `addChainBlock`/`appendChainTx`, plus `internal/chain.AppendBlock`) and separate verifier readers. The local full repository and its current uncommitted edits were not mounted in this workspace, so the legacy call sites have deliberately not been rewritten blindly.
+## Verification and tests
 
-Before enabling this writer, the integration must:
+The canonical `cmd/verifier` checks organization batch metadata, exact batch-to-row membership, transaction hash/signature, Merkle root, block hash/signature, and organization/block linkage. It fails closed when no canonical block rows can be loaded. `cmd/chain-verify` is explicitly labeled as a legacy SQLite audit tool, not the v1.5 verifier.
 
-- apply the additive SQL migration to a verified backup/clone only;
-- route the old license-save endpoint and every block writer through this function (or reject writes);
-- disable/remove `mineBlock`, `mineBlockHandler`, `addChainBlock`, `appendChainTx`, and `internal/chain.AppendBlock` as independent writers;
-- update the verifier to check `organization_id`, `license_count`, exact license membership, batch payload, Merkle root, block hash, and signatures;
-- add PostgreSQL integration tests, including rollback on duplicate license IDs and injected mid-batch failures;
-- run `go test -count=1 ./...` with Go 1.24.4.
+CI uses Go 1.24.4 and a disposable PostgreSQL 16 service. It validates the additive migration, tests cross-organization FK rejection, builds the chain packages, runs unit tests, exercises mid-batch rollback, and starts separate test processes to exercise PostgreSQL advisory locking.
 
-Do not execute the migration against the operational database until the integration is reviewed and tested. No database was changed by producing this patch.
+## Critical cutover limitation
 
-The engine now resides in the real `cmd/switch` Go package. Its additive model fields are applied directly to the existing `ChainBlock` and `License` structs. The WOTS signature and public-key values are persisted without rewriting them.
+Existing history is never assigned to organizations by inference. The currently audited operational `chain_blocks` history contains non-Genesis blocks that do not have v1.5 organization membership. After the additive migration those historical rows remain `organization_id = NULL` and `license_count = 0`. The write gate therefore rejects appending v1.5 blocks to that history.
+
+This is intentional. Do not:
+- backfill organization IDs without signed, independently verified source evidence;
+- rewrite Genesis or existing block hashes;
+- run the migration against the operational database before a separately verified backup/clone review;
+- enable the legacy writers to bypass the gate.
+
+A production cutover decision is still required for how the existing legacy history is retained and how the canonical v1.5 chain is rooted without rewriting or duplicating Genesis. Until that decision and an end-to-end verification of the selected database are complete, production issuance, renewal, and revocation remain fail-closed.
+
+## Operational status
+
+No production database migration, Genesis change, history rewrite, deployment, version bump, or merge was performed by this patch work.
