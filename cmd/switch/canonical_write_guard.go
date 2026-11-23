@@ -92,6 +92,18 @@ func validateLicenseChainForWrite(db *gorm.DB) error {
 		if i > 0 && blocks[i].PrevHash != blocks[i-1].Hash {
 			return fmt.Errorf("license-chain write gate: broken block link at height %d", blocks[i].BlockNum)
 		}
+		if i > 0 && (strings.TrimSpace(blocks[i].OrganizationID) == "" || blocks[i].LicenseCount <= 0 || blocks[i].TxCount != 1) {
+			return fmt.Errorf("license-chain write gate: block %d is not a canonical single-organization license block", blocks[i].BlockNum)
+		}
+		if i > 0 {
+			var count int64
+			if err := db.Table("licenses").Where("organization_id = ? AND block_num = ?", blocks[i].OrganizationID, blocks[i].BlockNum).Count(&count).Error; err != nil {
+				return fmt.Errorf("license-chain write gate: inspect organization licenses at block %d: %w", blocks[i].BlockNum, err)
+			}
+			if count != int64(blocks[i].LicenseCount) {
+				return fmt.Errorf("license-chain write gate: block %d declares %d licenses but has %d", blocks[i].BlockNum, blocks[i].LicenseCount, count)
+			}
+		}
 	}
 	var mismatchedCounts int64
 	if err := db.Table("chain_blocks AS cb").
