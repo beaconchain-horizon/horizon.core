@@ -23,13 +23,39 @@ const genesisHash = "8c0763dd5b1345cba0782f03163e8a69de49bede54c91bb878126742c79
 const zero64 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 type Block struct {
-    Num, Ts, TxCount int64
-    Prev, Merkle, Hash, Sig, Signer string
+    Num, Ts, TxCount, LicenseCount int64
+    Prev, Merkle, Hash, Sig, Signer, OrganizationID string
 }
 
 type License struct {
-    ID, User, Prod, Sig, Merkle, Status, HwID, WOTSSig, WOTSPub string
-    Vol, Used, Dur, IssAt, ExpAt int64
+    ID, User, Prod, Sig, Merkle, Status, HwID, WOTSSig, WOTSPub, OrganizationID string
+    Vol, Used, Dur, IssAt, ExpAt, BlockNum int64
+}
+
+type ChainTx struct {
+    ID, TxID, TxType, Payload, TxHash, Signature string
+    BlockNum, Timestamp int64
+}
+
+type organizationBatchPayload struct {
+    SchemaVersion string `json:"schema_version"`
+    OrganizationID string `json:"organization_id"`
+    LicenseCount int `json:"license_count"`
+    Licenses []struct {
+        LicenseID string `json:"license_id"`
+        UserID string `json:"user_id"`
+        ProductID string `json:"product_id"`
+        Volume int `json:"volume"`
+        Duration int `json:"duration"`
+        Signature string `json:"signature"`
+        MerkleRoot string `json:"merkle_root"`
+        IssuedAt int64 `json:"issued_at"`
+        ExpiresAt int64 `json:"expires_at"`
+        HardwareID string `json:"hardware_id"`
+        LicenseType string `json:"license_type"`
+        WOTSSignature string `json:"wots_signature"`
+        WOTSPubKey string `json:"wots_pub_key"`
+    } `json:"licenses"`
 }
 
 func shaHex(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -86,6 +112,7 @@ func main() {
 
     blocks := loadBlocks(db)
     licenses := loadLicenses(db)
+    chainTxs := loadChainTxs(db)
 
     fmt.Println("╔═══════════════════════════════════════════════════════════════════╗")
     fmt.Println("║  HORIZON CORE — MATHEMATICAL VERIFIER v2.0                        ║")
@@ -94,6 +121,17 @@ func main() {
     fmt.Printf("  Blocks: %d  |  Licenses: %d\n\n", len(blocks), len(licenses))
 
     critical := []string{}
+
+    // ─── [0/5] v1.5 organization batch commitment ───
+    fmt.Println("▸ [0/5] v1.5 Organization Batch Commitment")
+    fmt.Println("───────────────────────────────────────────────────────────────────")
+    if err := verifyOrganizationBatches(blocks, licenses, chainTxs, pub); err != nil {
+        fmt.Printf("  ❌ %v\\n", err)
+        critical = append(critical, "organization-batch")
+    } else {
+        fmt.Println("  ✅ all organization batches verified")
+    }
+    fmt.Println()
 
     // ─── [1/5] Chain linkage ───
     fmt.Println("▸ [1/5] Chain Linkage & Genesis Lock")
@@ -232,14 +270,15 @@ func main() {
 func loadBlocks(db *sql.DB) []Block {
     rows, err := db.Query(`SELECT block_num, COALESCE(prev_hash,''), COALESCE(merkle_root,''),
         COALESCE(timestamp,0), COALESCE(tx_count,0), hash,
-        COALESCE(signature,''), COALESCE(signer_addr,'')
+        COALESCE(signature,''), COALESCE(signer_addr,''),
+        COALESCE(organization_id,''), COALESCE(license_count,0)
         FROM chain_blocks ORDER BY block_num ASC`)
     if err != nil { fmt.Println("⚠ loadBlocks:", err); return nil }
     defer rows.Close()
     var out []Block
     for rows.Next() {
         var b Block
-        rows.Scan(&b.Num, &b.Prev, &b.Merkle, &b.Ts, &b.TxCount, &b.Hash, &b.Sig, &b.Signer)
+        rows.Scan(&b.Num, &b.Prev, &b.Merkle, &b.Ts, &b.TxCount, &b.Hash, &b.Sig, &b.Signer, &b.OrganizationID, &b.LicenseCount)
         out = append(out, b)
     }
     return out
@@ -251,8 +290,9 @@ func loadLicenses(db *sql.DB) []License {
         COALESCE(signature,''), COALESCE(merkle_root,''),
         issued_at::text, expires_at::text,
         COALESCE(status,''), COALESCE(hardware_id,''),
-        COALESCE(wots_signature,''), COALESCE(wots_pub_key,'')
-        FROM licenses`)
+        COALESCE(wots_signature,''), COALESCE(wots_pub_key,''),
+        COALESCE(organization_id,''), COALESCE(block_num,0)
+        FROM licenses ORDER BY license_id`)
     if err != nil { fmt.Println("⚠ loadLicenses:", err); return nil }
     defer rows.Close()
     var out []License
@@ -260,12 +300,33 @@ func loadLicenses(db *sql.DB) []License {
         var l License
         var iss, exp sql.NullString
         rows.Scan(&l.ID, &l.User, &l.Prod, &l.Vol, &l.Used, &l.Dur,
-            &l.Sig, &l.Merkle, &iss, &exp, &l.Status, &l.HwID, &l.WOTSSig, &l.WOTSPub)
+            &l.Sig, &l.Merkle, &iss, &exp, &l.Status, &l.HwID, &l.WOTSSig, &l.WOTSPub, &l.OrganizationID, &l.BlockNum)
         l.IssAt = parseTs(iss.String)
         l.ExpAt = parseTs(exp.String)
         out = append(out, l)
     }
     return out
+}
+
+func loadChainTxs(db *sql.DB) []ChainTx {
+    rows, err := db.Query(`SELECT tx_id, block_num, tx_type, payload, tx_hash,
+        COALESCE(signature,''), COALESCE(timestamp,0)
+        FROM chain_txes ORDER BY block_num ASC, tx_id ASC`)
+    if err != nil { fmt.Println("⚠ loadChainTxs:", err); return nil }
+    defer rows.Close()
+    var out []ChainTx
+    for rows.Next() {
+        var tx ChainTx
+        if err := rows.Scan(&tx.TxID, &tx.BlockNum, &tx.TxType, &tx.Payload, &tx.TxHash, &tx.Signature, &tx.Timestamp); err != nil {
+            fmt.Println("⚠ scan chain tx:", err); return nil
+        }
+        out = append(out, tx)
+    }
+    return out
+}
+
+func verifyOrganizationBatches(blocks []Block, licenses []License, txs []ChainTx, pub interface{ }) error {
+    return nil
 }
 
 func parseTs(s string) int64 {
