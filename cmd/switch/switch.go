@@ -734,74 +734,14 @@ func listBlocksHandler(c *gin.Context) {
 // ============ LICENSES ============
 
 func saveLicenseHandler(c *gin.Context) {
-	var req struct {
-		LicenseID  string `json:"license_id" binding:"required"`
-		UserID     string `json:"user_id" binding:"required"`
-		ProductID  string `json:"product_id"`
-		Volume     int    `json:"volume"`
-		Duration   int    `json:"duration"`
-		MerkleRoot string `json:"merkle_root"`
-		Signature  string `json:"signature" binding:"required"`
-		SignedData string `json:"signed_data" binding:"required"`
-		HardwareID string `json:"hardware_id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var sd map[string]interface{}
-	json.Unmarshal([]byte(req.SignedData), &sd)
-
-	var issuedAt, expiresAt int64
-	var duration int
-	var merkleRoot, hardwareID string
-
-	if val, ok := sd["issued_at"].(float64); ok {
-		issuedAt = int64(val)
-	}
-	if val, ok := sd["expires_at"].(float64); ok {
-		expiresAt = int64(val)
-	}
-	if val, ok := sd["duration"].(float64); ok {
-		duration = int(val)
-	}
-	if val, ok := sd["merkle_root"].(string); ok {
-		merkleRoot = val
-	}
-	if val, ok := sd["hardware_id"].(string); ok {
-		hardwareID = val
-	}
-
-	if merkleRoot == "" {
-		merkleRoot = req.MerkleRoot
-	}
-	if hardwareID == "" {
-		hardwareID = req.HardwareID
-	}
-
-	lic := &License{
-		LicenseID:  req.LicenseID,
-		UserID:     req.UserID,
-		ProductID:  req.ProductID,
-		Volume:     req.Volume,
-		Duration:   duration,
-		MerkleRoot: merkleRoot,
-		IssuedAt:   issuedAt,
-		ExpiresAt:  expiresAt,
-		Status:     "active",
-		HardwareID: hardwareID,
-		Signature:  req.Signature,
-	}
-
-	if err := db.Create(lic).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed: " + err.Error()})
-		return
-	}
-
-	log.Printf("License saved: %s", lic.LicenseID)
-	go checkLicenseNow()
-	c.JSON(http.StatusCreated, lic)
+	// Fail closed: the legacy endpoint inserts directly into licenses and
+	// cannot establish organization/block membership. v1.5 issuance must use
+	// CreateOrganizationBlockWithLicenses so block + event + license rows are
+	// committed atomically. No legacy license write is allowed to bypass it.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "direct license writes are disabled; use the v1.5 organization batch writer",
+		"code":  "UNIFIED_ORGANIZATION_WRITER_REQUIRED",
+	})
 }
 
 func listLicensesHandler(c *gin.Context) {
