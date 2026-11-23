@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_licenses_organization_block
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chain_blocks_block_organization
     ON public.chain_blocks (block_num, organization_id);
 
-DO $
+DO $migration$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
