@@ -18,6 +18,22 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: horizon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d horizon_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      HORIZON_TEST_POSTGRES_DSN: "host=localhost port=5432 user=postgres password=postgres dbname=horizon_test sslmode=disable"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
@@ -33,6 +49,27 @@ jobs:
         run: |
           go mod download
           go mod verify
+      - name: Validate additive migration on disposable PostgreSQL
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d horizon_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE public.chain_blocks (
+            id BIGSERIAL PRIMARY KEY, block_num BIGINT UNIQUE NOT NULL,
+            prev_hash TEXT NOT NULL, merkle_root TEXT, tx_count INTEGER,
+            timestamp BIGINT, hash TEXT NOT NULL, signature TEXT,
+            signer_addr TEXT, created_at TIMESTAMPTZ
+          );
+          CREATE TABLE public.licenses (
+            id BIGSERIAL PRIMARY KEY, license_id TEXT UNIQUE, user_id TEXT,
+            product_id TEXT, volume INTEGER, duration INTEGER, signature TEXT,
+            merkle_root TEXT, issued_at BIGINT, expires_at BIGINT, status TEXT,
+            hardware_id TEXT, license_type TEXT, wots_signature TEXT,
+            wots_pub_key TEXT, created_at TIMESTAMPTZ
+          );
+          SQL
+          psql -h localhost -U postgres -d horizon_test -v ON_ERROR_STOP=1 -f patches/v15-unified-org-license-engine-draft/migrations/001_add_organization_license_block_fields.sql
+          psql -h localhost -U postgres -d horizon_test -v ON_ERROR_STOP=1 -c "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('chain_blocks','licenses') AND column_name IN ('organization_id','license_count','block_num') ORDER BY table_name,column_name"
       - name: Build all packages
         run: go build -trimpath -buildvcs=false ./cmd/switch ./cmd/verifier ./cmd/chain-verify ./internal/...
       - name: Test all packages
