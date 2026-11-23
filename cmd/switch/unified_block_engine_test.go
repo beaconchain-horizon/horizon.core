@@ -62,7 +62,7 @@ func TestOrganizationBlockWriterRejectsInvalidPreconditions(t *testing.T) {
 	if _, err := CreateOrganizationBlockWithLicenses(db, testOrganizationSigningKey(t), "", nil); err == nil || err.Error() != "unified writer: organization_id is required" {
 		t.Fatalf("expected missing organization rejection, got %v", err)
 	}
-	if _, err := CreateOrganizationBlockWithLicenses(db, testOrganizationSigningKey(t).(*ecdsa.PrivateKey), "org-a", nil); err == nil || err.Error() != "unified writer: at least one license is required" {
+	if _, err := CreateOrganizationBlockWithLicenses(db, testOrganizationSigningKey(t), "org-a", nil); err == nil || err.Error() != "unified writer: at least one license is required" {
 		t.Fatalf("expected empty license batch rejection, got %v", err)
 	}
 }
