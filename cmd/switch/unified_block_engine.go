@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"gorm.io/gorm"
@@ -72,6 +73,17 @@ func CreateOrganizationBlockWithLicenses(
 
 	var created ChainBlock
 	err := db.Transaction(func(tx *gorm.DB) error {
+		// Serialize writers across independent Switch processes on PostgreSQL.
+		// The transaction-scoped advisory lock is released automatically on
+		// commit/rollback. SQLite remains serialized by chainMutex in-process;
+		// its database write lock and unique constraints provide cross-process
+		// conflict detection (a loser must retry the whole request).
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(0x485A4F52495A4F4E)).Error; err != nil {
+				return fmt.Errorf("unified writer: acquire PostgreSQL chain lock: %w", err)
+			}
+		}
+
 		// Do not repair, migrate, or bootstrap a chain here. A non-canonical
 		// history remains fail-closed and must be handled by a separate audit.
 		if err := validateLicenseChainForWrite(tx); err != nil {
@@ -95,6 +107,21 @@ func CreateOrganizationBlockWithLicenses(
 			if lic.Volume < 0 || lic.Duration < 0 {
 				return fmt.Errorf("unified writer: license[%d] has negative volume or duration", i)
 			}
+		}
+
+		// A license ID must be globally unused, not merely unique inside
+		// this request. The database unique constraint remains the final race
+		// barrier; this preflight gives a deterministic domain error.
+		licenseIDs := make([]string, 0, len(licenses))
+		for _, lic := range licenses {
+			licenseIDs = append(licenseIDs, lic.LicenseID)
+		}
+		var existingIDs int64
+		if err := tx.Table("licenses").Where("license_id IN ?", licenseIDs).Count(&existingIDs).Error; err != nil {
+			return fmt.Errorf("unified writer: check existing license IDs: %w", err)
+		}
+		if existingIDs != 0 {
+			return fmt.Errorf("unified writer: %d license ID(s) already exist", existingIDs)
 		}
 
 		payload := organizationLicenseBatchPayload{
@@ -177,6 +204,24 @@ func CreateOrganizationBlockWithLicenses(
 		}
 		if persisted != int64(len(licenses)) {
 			return fmt.Errorf("unified writer: license count mismatch: requested=%d persisted=%d", len(licenses), persisted)
+		}
+		// Verify exact membership, not just the aggregate count. A trigger or
+		// unexpected DB-side behavior must not substitute another license row.
+		var storedIDs []string
+		if err := tx.Table("licenses").Select("license_id").
+			Where("organization_id = ? AND block_num = ?", organizationID, blockNum).
+			Order("license_id ASC").Pluck("license_id", &storedIDs).Error; err != nil {
+			return fmt.Errorf("unified writer: verify persisted license membership: %w", err)
+		}
+		wantIDs := append([]string(nil), licenseIDs...)
+		sort.Strings(wantIDs)
+		if len(storedIDs) != len(wantIDs) {
+			return fmt.Errorf("unified writer: persisted license membership length mismatch")
+		}
+		for i := range wantIDs {
+			if storedIDs[i] != wantIDs[i] {
+				return fmt.Errorf("unified writer: persisted license membership mismatch at index %d", i)
+			}
 		}
 		return nil
 	})
