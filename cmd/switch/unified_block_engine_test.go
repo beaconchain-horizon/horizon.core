@@ -69,7 +69,7 @@ func TestOrganizationBlockWriterRejectsInvalidPreconditions(t *testing.T) {
 
 func TestOrganizationBlockWriterPersistsOneAtomicOrganizationBatch(t *testing.T) {
 	db := openUnifiedWriterTestDB(t)
-	key := testOrganizationSigningKey(t).(*ecdsa.PrivateKey)
+	key := testOrganizationSigningKey(t)
 	block, err := CreateOrganizationBlockWithLicenses(db, key, "org-a", []OrganizationLicenseInput{testLicense("lic-1"), testLicense("lic-2")})
 	if err != nil {
 		t.Fatalf("create organization block: %v", err)
@@ -93,7 +93,7 @@ func TestOrganizationBlockWriterRollsBackAfterMidBatchFailure(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'injected mid-batch failure'); END;`).Error; err != nil {
 		t.Fatalf("install failure trigger: %v", err)
 	}
-	key := testOrganizationSigningKey(t).(*ecdsa.PrivateKey)
+	key := testOrganizationSigningKey(t)
 	_, err := CreateOrganizationBlockWithLicenses(db, key, "org-a", []OrganizationLicenseInput{testLicense("lic-first"), testLicense("lic-fail")})
 	if err == nil {
 		t.Fatal("expected injected mid-batch failure")
