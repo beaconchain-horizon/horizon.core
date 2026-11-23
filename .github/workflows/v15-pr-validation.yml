@@ -1,0 +1,39 @@
+name: Horizon v1.5 PR validation
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [feature/v15-unified-org-license-engine-draft]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.24.4"
+  GOTOOLCHAIN: "local"
+  GOWORK: "off"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Verify Go toolchain
+        run: |
+          go version
+          test "$(go env GOVERSION)" = "go1.24.4"
+      - name: Verify modules
+        run: |
+          go mod download
+          go mod verify
+      - name: Build all packages
+        run: go build -trimpath -buildvcs=false ./...
+      - name: Test all packages
+        run: go test -count=1 ./...

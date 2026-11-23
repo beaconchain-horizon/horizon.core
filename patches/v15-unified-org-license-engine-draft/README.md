@@ -27,5 +27,4 @@ Before enabling this writer, the integration must:
 
 Do not execute the migration against the operational database until the integration is reviewed and tested. No database was changed by producing this patch.
 
-`models.patch` contains the required additive Go model fields. It is intentionally
-separate from the engine file because those structs already exist in the source.
+The engine now resides in the real `cmd/switch` Go package. Its additive model fields are applied directly to the existing `ChainBlock` and `License` structs. The WOTS signature and public-key values are persisted without rewriting them.

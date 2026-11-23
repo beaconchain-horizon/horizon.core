@@ -66,7 +66,9 @@ type Transaction struct {
 
 type License struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
-	LicenseID     string    `gorm:"uniqueIndex" json:"license_id"`
+	LicenseID      string    `gorm:"uniqueIndex" json:"license_id"`
+	OrganizationID string    `gorm:"index" json:"organization_id"`
+	BlockNum       int64     `gorm:"index" json:"block_num"`
 	UserID        string    `gorm:"index" json:"user_id"`
 	ProductID     string    `json:"product_id"`
 	Volume        int       `json:"volume"`

@@ -160,6 +160,7 @@ func CreateOrganizationBlockWithLicenses(
 				"issued_at": lic.IssuedAt, "expires_at": lic.ExpiresAt,
 				"status": "active", "hardware_id": lic.HardwareID,
 				"license_type":    lic.LicenseType,
+				"wots_signature": lic.WOTSSignature, "wots_pub_key": lic.WOTSPubKey,
 				"organization_id": organizationID, "block_num": blockNum,
 				"created_at": time.Now().UTC(),
 			}

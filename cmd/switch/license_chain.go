@@ -39,7 +39,9 @@ const (
 // ─── Chain Block ───
 type ChainBlock struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
-	BlockNum   int64     `gorm:"uniqueIndex;not null" json:"block_num"`
+	BlockNum       int64     `gorm:"uniqueIndex;not null" json:"block_num"`
+	OrganizationID string    `gorm:"index" json:"organization_id"`
+	LicenseCount   int       `json:"license_count"`
 	PrevHash   string    `gorm:"not null" json:"prev_hash"`
 	MerkleRoot string    `json:"merkle_root"`
 	TxCount    int       `json:"tx_count"`
