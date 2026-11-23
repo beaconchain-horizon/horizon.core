@@ -248,6 +248,9 @@ func adminIssueLicenseHandler(c *gin.Context) {
 	if req.Duration == 0 {
 		req.Duration = 8760
 	}
+	if req.LicenseType == "" {
+		req.LicenseType = "client"
+	}
 	if req.Volume <= 0 || req.Duration < 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "volume must be positive and duration non-negative"})
 		return
