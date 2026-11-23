@@ -1,6 +1,7 @@
 package main
 
 import (
+    "crypto/ecdsa"
     "crypto/sha256"
     "crypto/x509"
     "database/sql"
@@ -11,6 +12,7 @@ import (
     "os"
     "strconv"
     "strings"
+    "sort"
     "time"
 
     _ "github.com/lib/pq"
@@ -325,7 +327,125 @@ func loadChainTxs(db *sql.DB) []ChainTx {
     return out
 }
 
-func verifyOrganizationBatches(blocks []Block, licenses []License, txs []ChainTx, pub interface{ }) error {
+func verifyOrganizationBatches(blocks []Block, licenses []License, txs []ChainTx, pub *ecdsa.PublicKey) error {
+    txsByBlock := make(map[int64][]ChainTx)
+    licensesByBlock := make(map[int64][]License)
+    for _, tx := range txs {
+        txsByBlock[tx.BlockNum] = append(txsByBlock[tx.BlockNum], tx)
+    }
+    for _, lic := range licenses {
+        if lic.BlockNum > 0 || lic.OrganizationID != "" {
+            licensesByBlock[lic.BlockNum] = append(licensesByBlock[lic.BlockNum], lic)
+        }
+    }
+
+    verified := 0
+    for _, block := range blocks {
+        if block.Num == 0 { continue }
+        if strings.TrimSpace(block.OrganizationID) == "" {
+            return fmt.Errorf("block #%d has no organization_id; legacy history cannot be silently relabeled as v1.5", block.Num)
+        }
+        if block.LicenseCount <= 0 || block.TxCount != 1 {
+            return fmt.Errorf("block #%d violates organization block cardinality: license_count=%d tx_count=%d", block.Num, block.LicenseCount, block.TxCount)
+        }
+        blockTxs := txsByBlock[block.Num]
+        if len(blockTxs) != 1 {
+            return fmt.Errorf("block #%d must contain exactly one organization batch event; found %d", block.Num, len(blockTxs))
+        }
+        tx := blockTxs[0]
+        if tx.TxType != "organization.licenses.issue" {
+            return fmt.Errorf("block #%d has unexpected event type %q", block.Num, tx.TxType)
+        }
+
+        var payload organizationBatchPayload
+        if err := json.Unmarshal([]byte(tx.Payload), &payload); err != nil {
+            return fmt.Errorf("block #%d batch payload JSON: %w", block.Num, err)
+        }
+        if payload.SchemaVersion != "horizon.organization-license-batch.v1" ||
+            payload.OrganizationID != block.OrganizationID ||
+            payload.LicenseCount != int(block.LicenseCount) ||
+            payload.LicenseCount != len(payload.Licenses) {
+            return fmt.Errorf("block #%d batch metadata mismatch", block.Num)
+        }
+
+        expectedTxHash := shaHex([]byte(fmt.Sprintf("HZTXH1|%s|%s|%d", tx.TxType, tx.Payload, tx.Timestamp)))
+        if tx.TxHash != expectedTxHash {
+            return fmt.Errorf("block #%d event hash mismatch", block.Num)
+        }
+        expectedMerkle := shaHex([]byte(tx.TxHash))
+        if block.Merkle != expectedMerkle {
+            return fmt.Errorf("block #%d batch Merkle root mismatch", block.Num)
+        }
+        if block.Hash != legacyBlockHash(block.Num, block.Prev, block.Merkle, block.Ts) {
+            return fmt.Errorf("block #%d block hash mismatch", block.Num)
+        }
+        txMsg := []byte(fmt.Sprintf("HZTX1|%s|%s|%s|%d", tx.TxType, tx.TxID, tx.Payload, tx.Timestamp))
+        txSigOK, txSigErr := crypto.VerifyData(pub, txMsg, tx.Signature)
+        if txSigErr != nil || !txSigOK {
+            return fmt.Errorf("block #%d batch event signature invalid", block.Num)
+        }
+        blockSigOK, blockSigErr := crypto.VerifyData(pub, []byte(legacyBlockMsg(block.Num, block.Prev, block.Merkle, block.Ts)), block.Sig)
+        if blockSigErr != nil || !blockSigOK {
+            return fmt.Errorf("block #%d block signature invalid", block.Num)
+        }
+
+        stored := licensesByBlock[block.Num]
+        if len(stored) != int(block.LicenseCount) {
+            return fmt.Errorf("block #%d license row count mismatch: declared=%d stored=%d", block.Num, block.LicenseCount, len(stored))
+        }
+        storedByID := make(map[string]License, len(stored))
+        for _, lic := range stored {
+            if lic.OrganizationID != block.OrganizationID {
+                return fmt.Errorf("block #%d contains cross-organization license %q", block.Num, lic.ID)
+            }
+            if _, exists := storedByID[lic.ID]; exists {
+                return fmt.Errorf("block #%d has duplicate persisted license %q", block.Num, lic.ID)
+            }
+            storedByID[lic.ID] = lic
+        }
+        payloadIDs := make([]string, 0, len(payload.Licenses))
+        for _, item := range payload.Licenses {
+            payloadIDs = append(payloadIDs, item.LicenseID)
+            lic, ok := storedByID[item.LicenseID]
+            if !ok {
+                return fmt.Errorf("block #%d payload license %q is absent from registry rows", block.Num, item.LicenseID)
+            }
+            if lic.User != item.UserID || lic.Prod != item.ProductID ||
+                lic.Vol != int64(item.Volume) || lic.Dur != int64(item.Duration) ||
+                lic.Sig != item.Signature || lic.Merkle != item.MerkleRoot ||
+                lic.IssAt != item.IssuedAt || lic.ExpAt != item.ExpiresAt ||
+                lic.HwID != item.HardwareID || lic.WOTSSig != item.WOTSSignature ||
+                lic.WOTSPub != item.WOTSPubKey || lic.BlockNum != block.Num {
+                return fmt.Errorf("block #%d payload/registry mismatch for license %q", block.Num, item.LicenseID)
+            }
+        }
+        sort.Strings(payloadIDs)
+        if len(payloadIDs) != len(storedByID) {
+            return fmt.Errorf("block #%d payload membership length mismatch", block.Num)
+        }
+        for i := 1; i < len(payloadIDs); i++ {
+            if payloadIDs[i] == payloadIDs[i-1] {
+                return fmt.Errorf("block #%d payload repeats license %q", block.Num, payloadIDs[i])
+            }
+        }
+        verified++
+    }
+
+    // Every v1.5-linked license must point to an existing organization block.
+    for _, lic := range licenses {
+        if lic.OrganizationID == "" && lic.BlockNum == 0 { continue } // legacy, unassigned record
+        found := false
+        for _, block := range blocks {
+            if block.Num == lic.BlockNum && block.OrganizationID == lic.OrganizationID {
+                found = true
+                break
+            }
+        }
+        if !found {
+            return fmt.Errorf("license %q references missing organization block #%d", lic.ID, lic.BlockNum)
+        }
+    }
+    _ = verified
     return nil
 }
 
