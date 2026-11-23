@@ -23,6 +23,11 @@ type PendingTx struct {
 // links it to the previous block, and persists everything in one
 // database transaction. Returns the new block.
 func AppendBlock(db *gorm.DB, txs []PendingTx) (*Block, error) {
+	// This package models a separate legacy chain schema. It is retained for
+	// historical reads, but must not append to a competing ledger. The v1.5
+	// canonical writer lives in cmd/switch and commits organization batches.
+	return nil, fmt.Errorf("legacy internal/chain writer disabled; use the canonical Horizon organization block writer")
+
 	if len(txs) == 0 {
 		return nil, fmt.Errorf("append block: no transactions")
 	}
