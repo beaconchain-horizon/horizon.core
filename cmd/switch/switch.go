@@ -763,22 +763,14 @@ func main() {
 	}
 	initCustomers()
 
-	// init adaptive chain batcher (async batching)
-	if runtimeWritesAllowed.Load() {
-		InitBatcher(db, BatcherConfig{
-			MaxSize:       50000,
-			FlushInterval: 200 * time.Millisecond,
-		})
-	} else {
-		log.Printf("[RECOVERY] batcher disabled: canonical chain validation has not passed")
-	}
+	// Generic transaction batching creates non-organization blocks and is
+	// incompatible with the v1.5 one-organization/one-license-batch invariant.
+	// Keep it disabled until a typed organization-scoped anchor writer exists.
+	log.Printf("[V15] generic chain batcher disabled: organization-scoped writer required")
 
-	// start industrial anchor worker
-	if runtimeWritesAllowed.Load() {
-		startIndustrialAnchorWorker()
-	} else {
-		log.Printf("[RECOVERY] industrial anchor worker disabled")
-	}
+	// Industrial readings remain in their source store until an organization-
+	// scoped anchor contract and verifier are implemented.
+	log.Printf("[V15] industrial anchor worker disabled: organization-scoped anchor contract required")
 	initAuditMiddleware()
 	if err := loadLedgerFromDB(ledger); err != nil {
 		log.Printf("ledger load warning: %v", err)
