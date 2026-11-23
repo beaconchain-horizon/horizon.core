@@ -2,11 +2,15 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	internalcrypto "horizon-core/internal/crypto"
 
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -114,5 +118,58 @@ func TestLicenseChainWriteGateRejectsLegacyNonOrganizationBlocks(t *testing.T) {
 	}
 	if err := validateLicenseChainForWrite(db); err == nil {
 		t.Fatal("expected legacy non-organization block to fail closed")
+	}
+}
+
+func TestOrganizationBlockWriterPostgresIntegration(t *testing.T) {
+	dsn := os.Getenv("HORIZON_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("HORIZON_TEST_POSTGRES_DSN is not configured")
+	}
+	if !strings.Contains(dsn, "horizon_test") {
+		t.Fatal("refusing PostgreSQL integration test unless DSN targets a database named horizon_test")
+	}
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open disposable PostgreSQL database: %v", err)
+	}
+	if err := db.Migrator().DropTable(&License{}, &ChainTx{}, &ChainBlock{}); err != nil {
+		t.Fatalf("reset disposable test schema: %v", err)
+	}
+	if err := db.AutoMigrate(&ChainBlock{}, &ChainTx{}, &License{}); err != nil {
+		t.Fatalf("migrate disposable PostgreSQL schema: %v", err)
+	}
+	genesis := ChainBlock{
+		BlockNum: 0, PrevHash: lockedV14ZeroHash, MerkleRoot: lockedV14GenesisHash,
+		TxCount: 0, Timestamp: lockedV14GenesisUnixSeconds, Hash: lockedV14GenesisHash,
+	}
+	if err := db.Create(&genesis).Error; err != nil {
+		t.Fatalf("insert PostgreSQL Genesis fixture: %v", err)
+	}
+
+	key := testOrganizationSigningKey(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, id := range []string{"pg-a", "pg-b"} {
+		wg.Add(1)
+		go func(licenseID string) {
+			defer wg.Done()
+			_, err := CreateOrganizationBlockWithLicenses(db, key, "org-postgres", []OrganizationLicenseInput{testLicense(licenseID)})
+			errs <- err
+		}(id)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent PostgreSQL writer failed: %v", err)
+		}
+	}
+	var blocks, txs, licenses int64
+	db.Model(&ChainBlock{}).Count(&blocks)
+	db.Model(&ChainTx{}).Count(&txs)
+	db.Model(&License{}).Count(&licenses)
+	if blocks != 3 || txs != 2 || licenses != 2 {
+		t.Fatalf("PostgreSQL atomic result mismatch: blocks=%d txs=%d licenses=%d", blocks, txs, licenses)
 	}
 }
