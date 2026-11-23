@@ -222,13 +222,14 @@ func adminAuditHandler(c *gin.Context) {
 
 func adminIssueLicenseHandler(c *gin.Context) {
 	var req struct {
-		LicenseID   string `json:"license_id" binding:"required"`
-		UserID      string `json:"user_id" binding:"required"`
-		ProductID   string `json:"product_id"`
-		Volume      int    `json:"volume"`
-		Duration    int    `json:"duration"`
-		LicenseType string `json:"license_type"`
-		MerkleRoot  string `json:"merkle_root"`
+		OrganizationID string `json:"organization_id" binding:"required"`
+		LicenseID      string `json:"license_id" binding:"required"`
+		UserID         string `json:"user_id" binding:"required"`
+		ProductID      string `json:"product_id"`
+		Volume         int    `json:"volume"`
+		Duration       int    `json:"duration"`
+		LicenseType    string `json:"license_type"`
+		MerkleRoot     string `json:"merkle_root"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -242,81 +243,55 @@ func adminIssueLicenseHandler(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "key locked"})
 		return
 	}
-
 	if req.ProductID == "" {
 		req.ProductID = "horizon-core"
 	}
 	if req.Duration == 0 {
 		req.Duration = 8760
 	}
+	if req.Volume <= 0 || req.Duration < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "volume must be positive and duration non-negative"})
+		return
+	}
 
 	now := time.Now().Unix()
 	lic := &License{
-		LicenseID:   req.LicenseID,
-		UserID:      req.UserID,
-		ProductID:   req.ProductID,
-		Volume:      req.Volume,
-		Duration:    req.Duration,
-		MerkleRoot:  req.MerkleRoot,
-		IssuedAt:    now,
-		ExpiresAt:   now + int64(req.Duration*86400),
-		Status:      "active",
-		LicenseType: req.LicenseType,
+		LicenseID: req.LicenseID, OrganizationID: req.OrganizationID,
+		UserID: req.UserID, ProductID: req.ProductID, Volume: req.Volume,
+		Duration: req.Duration, MerkleRoot: req.MerkleRoot,
+		IssuedAt: now, ExpiresAt: now + int64(req.Duration*86400),
+		Status: "active", LicenseType: req.LicenseType,
 	}
-
 	if lic.MerkleRoot == "" {
 		lic.MerkleRoot = licenseMerkleRoot(lic)
 	}
-
-	msg := licenseCanonicalMessage(lic)
-	sig, err := signData(key, []byte(msg))
+	sig, err := signData(key, []byte(licenseCanonicalMessage(lic)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign failed: " + err.Error()})
 		return
 	}
 	lic.Signature = sig
+	// WOTS remains intentionally empty: the current implementation is not
+	// a production-safe stateful one-time signature system.
+	lic.WOTSSignature, lic.WOTSPubKey = "", ""
 
-	// PQ signature issuance is deliberately disabled in production.
-	// The bundled WOTS code is experimental, is not a verified RFC 8391 XMSS implementation,
-	// and has no persistent one-time index or rollback protection. Keep the ECDSA signature above.
-	lic.WOTSSignature = ""
-	lic.WOTSPubKey = ""
-
-	if err := db.Create(lic).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed: " + err.Error()})
+	input := OrganizationLicenseInput{
+		LicenseID: lic.LicenseID, UserID: lic.UserID, ProductID: lic.ProductID,
+		Volume: lic.Volume, Duration: lic.Duration, Signature: lic.Signature,
+		MerkleRoot: lic.MerkleRoot, IssuedAt: lic.IssuedAt, ExpiresAt: lic.ExpiresAt,
+		HardwareID: lic.HardwareID, LicenseType: lic.LicenseType,
+		WOTSSignature: lic.WOTSSignature, WOTSPubKey: lic.WOTSPubKey,
+	}
+	block, err := CreateOrganizationBlockWithLicenses(db, key, req.OrganizationID, []OrganizationLicenseInput{input})
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "organization license block was not created", "reason": err.Error()})
 		return
 	}
+	lic.BlockNum = block.BlockNum
 
-	// append license to blockchain chain
-	if chainTx, _, err := appendChainTx(db, key, TxLicenseIssue, lic); err != nil {
-		log.Printf("⚠️  chain: license append failed: %v", err)
-	} else {
-		log.Printf("⛓  license %s appended in block #%d", lic.LicenseID, chainTx.BlockNum)
-	}
-
-	// ثبت لایسنس به عنوان یک تراکنش در صف اجماع
-	tx := &Transaction{
-		TxID:       fmt.Sprintf("lic_%s_%d", lic.LicenseID, time.Now().UnixNano()),
-		From:       "system",
-		To:         lic.UserID,
-		Amount:     0,
-		Type:       TxLicenseIssue,
-		Timestamp:  time.Now().Unix(),
-		BlockIndex: -1,
-		Synced:     false,
-	}
-	if err := db.Create(tx).Error; err != nil {
-		log.Printf("⚠️  failed to queue license tx: %v", err)
-	} else {
-		log.Printf("⛓  license %s queued as tx (awaiting 8-node consensus)", lic.LicenseID)
-	}
-
-	addAudit("issue_license", lic.LicenseID, "for user "+lic.UserID, c.ClientIP())
-
-	// refresh license state in memory (so isLicenseValid becomes true)
+	addAudit("issue_license", lic.LicenseID, "organization="+req.OrganizationID+" block="+fmt.Sprint(block.BlockNum), c.ClientIP())
 	checkLicenseNow()
-
-	c.JSON(http.StatusCreated, lic)
+	c.JSON(http.StatusCreated, gin.H{"license": lic, "block": block})
 }
 
 func revokeLicenseHandler(c *gin.Context) {
